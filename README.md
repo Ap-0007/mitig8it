@@ -148,6 +148,8 @@ the command that reproduces it.
 | `scripts/replay/` | The harness that replays real pull requests. |
 | `docs/validation/` | Every measurement, with the run that produced it. |
 | `docs/history/` | Dated reviews, kept as written and not maintained. |
+| `CHANGELOG.md` | What each release contains. |
+| `docs/releasing.md` | What a version promises, how a release is cut, and the Marketplace answer. |
 
 A fuller description of each component and its interfaces is in
 [docs/reference/system-overview.md](docs/reference/system-overview.md).
