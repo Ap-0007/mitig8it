@@ -12,7 +12,7 @@ import dataclasses
 
 import pytest
 
-from src.families import STATIC_ASSERTION_FAMILIES, declares_static_assertion
+from src.families import FAMILY_VERIFICATION, STATIC_ASSERTION, declares_static_assertion
 from src.git_tree import compute_tree_oid
 from src.models import GitTreeEntry, RepairRequest
 from src.patches import NO_LOAD_CHECK_LIMITATION, PatchPolicyError, build_patch_bundle
@@ -170,13 +170,17 @@ def test_the_policy_flag_defaults_to_true(request_payload):
     assert RepairRequest.model_validate(request_payload).policy.allow_static_assertion_verification is True
 
 
-def test_no_family_declares_the_level_yet_and_the_predicate_answers_either_way():
-    # Empty today: the two categories this route is for, a tampered workflow and a committed
-    # secret, are not detection families yet. The predicate is still the declaration mechanism.
-    assert STATIC_ASSERTION_FAMILIES == frozenset()
+def test_only_the_workflow_family_declares_the_level_and_the_predicate_answers_either_way():
+    # `workflow_hardening` is the one family whose repair no regression test could demonstrate
+    # even in principle: the thing repaired is a document GitHub interprets, so there is no module
+    # to load and no call to observe. Every family a proof can drive must answer False here, or
+    # the declaration would trade an executed proof for a weaker one.
+    assert declares_static_assertion("workflow_hardening") is True
     assert declares_static_assertion("hardcoded_credential") is False
     assert declares_static_assertion(None) is False
     assert declares_static_assertion("workflow_tampering") is False
+    declared = sorted(family for family, kind in FAMILY_VERIFICATION.items() if kind == STATIC_ASSERTION)
+    assert declared == ["workflow_hardening"]
 
 
 # -- clause 1: the rule matches the original at the finding's line -----------------------------

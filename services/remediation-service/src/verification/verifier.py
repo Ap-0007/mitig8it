@@ -32,6 +32,11 @@ DEVELOPMENT_VERIFICATION_LEVEL = "development_unverified"
 # levels above differ in how well isolated the thing that executed the repair was; this one is
 # the level for a candidate where nothing executed at all, and the rule that flagged the line
 # was re-run over the file text instead. `contracts/repair-v1.md` states its five clauses.
+#
+# `workflow_hardening` is the first family that can only ever use it, and that family's gate asks
+# whether the level has arrived by asking `STATIC_ASSERTION_VERIFICATION_LEVEL in
+# VERIFICATION_LEVELS` (`gates.static_assertion_level_available`). It is in that set now, so the
+# family is on; before it was, every candidate of the family was refused by name.
 STATIC_ASSERTION_VERIFICATION_LEVEL = "static_assertion"
 # The levels a sandbox's own evidence may claim. The static assertion is deliberately absent: it
 # is produced by the verifier itself from a scanner answer, never reported by a driver, so a

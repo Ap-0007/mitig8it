@@ -22,7 +22,8 @@ So there is a second, weaker, honestly named level. A candidate is verified at
 
 It is strictly weaker than `development_unverified`, which is itself the weakest executed level,
 and `VERIFICATION_LEVEL_ORDER` in `verifier.py` says so. It is never an upgrade: the engine
-reaches for it only for a family that declares it (`families.STATIC_ASSERTION_FAMILIES`) or for a
+reaches for it only for a family that declares it (`families.declares_static_assertion`, which is
+`FAMILY_VERIFICATION`) or for a
 finding whose execution was refused for a reason that goes into the evidence.
 
 **Where the rules run.** Not here. This service cannot install semgrep: its image pins

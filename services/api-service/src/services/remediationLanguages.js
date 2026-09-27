@@ -1,7 +1,7 @@
 // Which affected files a repair can even be attempted on.
 //
 // The repair service decides support per finding from the affected file's language
-// (`services/remediation-service/src/families.py`): a suffix outside these two sets has
+// (`services/remediation-service/src/families.py`): a suffix outside these sets has
 // no toolchain that could check a repair, so the finding is skipped with
 // `unsupported_language`. That decision used to be taken only inside the repair service,
 // which meant a job whose selection mixed supported and unsupported files spent its
@@ -14,9 +14,16 @@
 // `families.py` and fails if the two ever drift apart.
 const JAVASCRIPT = 'javascript';
 const PYTHON = 'python';
+const WORKFLOW = 'workflow';
 
 const JAVASCRIPT_SUFFIXES = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 const PYTHON_SUFFIXES = new Set(['.py']);
+// A workflow is a language here because the workflow_hardening family repairs one, and it
+// is decided by path rather than by suffix alone: a `.yml` file anywhere else is ordinary
+// YAML that these templates must never be handed. Mirrors WORKFLOW_SUFFIXES and
+// WORKFLOW_DIRECTORY in families.py.
+const WORKFLOW_SUFFIXES = new Set(['.yml', '.yaml']);
+const WORKFLOW_DIRECTORY = '.github/workflows/';
 
 const UNSUPPORTED_LANGUAGE_CODE = 'unsupported_language';
 // The repair service's own wording for this skip (`gates.UNSUPPORTED_LANGUAGE_MESSAGE`),
@@ -39,11 +46,20 @@ function suffixOf(path) {
   return dot > 0 ? name.slice(dot).toLowerCase() : '';
 }
 
+// families.py `is_workflow_path`: the suffix and the directory both have to hold.
+function isWorkflowPath(path) {
+  if (!path) return false;
+  const normalized = String(path).replace(/\\/g, '/').toLowerCase();
+  if (!WORKFLOW_SUFFIXES.has(suffixOf(normalized))) return false;
+  return normalized.startsWith(WORKFLOW_DIRECTORY) || normalized.includes(`/${WORKFLOW_DIRECTORY}`);
+}
+
 function languageOfPath(path) {
   if (!path) return null;
   const suffix = suffixOf(path);
   if (JAVASCRIPT_SUFFIXES.has(suffix)) return JAVASCRIPT;
   if (PYTHON_SUFFIXES.has(suffix)) return PYTHON;
+  if (isWorkflowPath(path)) return WORKFLOW;
   return null;
 }
 
@@ -65,8 +81,8 @@ function unsupportedLanguageSkip(findingId) {
 }
 
 module.exports = {
-  JAVASCRIPT, PYTHON, JAVASCRIPT_SUFFIXES, PYTHON_SUFFIXES,
+  JAVASCRIPT, PYTHON, WORKFLOW, JAVASCRIPT_SUFFIXES, PYTHON_SUFFIXES, WORKFLOW_SUFFIXES, WORKFLOW_DIRECTORY,
   UNSUPPORTED_LANGUAGE_CODE, UNSUPPORTED_LANGUAGE_MESSAGE,
   SELECTION_STAGE, SNAPSHOT_STAGE, CARRIED_SKIP_STAGES,
-  languageOfPath, isRemediablePath, partitionBySupportedLanguage, unsupportedLanguageSkip,
+  languageOfPath, isWorkflowPath, isRemediablePath, partitionBySupportedLanguage, unsupportedLanguageSkip,
 };

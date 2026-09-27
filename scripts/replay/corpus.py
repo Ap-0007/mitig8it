@@ -118,12 +118,21 @@ def _single_child(target: Path) -> Path:
 
 
 def walk_analysable_files(root: Path) -> Iterator[Path]:
-    """Every file in the tree the production content fetch would accept, vendored trees aside."""
+    """Every file in the tree the production content fetch would accept, vendored trees aside.
+
+    Dotted directories are skipped, with one exception that is not a special case so much as
+    a correction: `.github` is where the workflows live, and a workflow is now part of the
+    tier 2 scope. Excluding it meant a snapshot reported zero findings for the workflow rules
+    however many the tree actually contained, which is the failure mode this harness exists to
+    prevent. Only `.github` is re-admitted; `should_fetch_content` still decides each file, so
+    nothing but `.github/workflows/*.y{a,}ml` comes back from it.
+    """
     root = Path(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
             name for name in dirnames
-            if name not in VENDOR_DIRECTORY_NAMES and not name.startswith(".")
+            if name not in VENDOR_DIRECTORY_NAMES
+            and (not name.startswith(".") or name == ".github")
         )
         for name in sorted(filenames):
             candidate = Path(dirpath) / name

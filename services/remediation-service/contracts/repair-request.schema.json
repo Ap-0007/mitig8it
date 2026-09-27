@@ -303,7 +303,8 @@
               "command_arguments",
               "path_containment",
               "hardcoded_credential",
-              "code_injection_eval"
+              "code_injection_eval",
+              "workflow_hardening"
             ],
             "type": "string"
           },

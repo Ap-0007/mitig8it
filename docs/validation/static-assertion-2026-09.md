@@ -51,7 +51,7 @@ they reproduce the 249 of the page above exactly. Nothing on this branch changes
 | Findings with both halves | 8 | 8 |
 | Pairs that verify end to end, by execution | 8 | 8 |
 | Findings with a patch and no proof, where the assertion is the only route | 54 | 54 |
-| Those the static assertion carries | — | **9** |
+| Those the static assertion carries | none | **9** |
 | **A verified fix at any level** | **8** | **17** |
 
 Nine findings out of 54, and the honest way to read that is in two halves, because the 54 are not
