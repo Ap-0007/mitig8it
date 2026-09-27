@@ -68,9 +68,12 @@ these.
    patterns. A rule whose measured precision is below 0.8 over at least three adjudicated findings
    is quarantined: it still runs and is still counted, and nothing it produces reaches you.
 3. Findings are deduplicated, clustered and fingerprinted, so the same issue does not arrive twice.
-4. For a finding in one of five repair families, the engine writes a patch and a regression test,
-   and runs the test on the original tree and on the repaired one. It refuses rather than guessing:
-   the refusal reasons are the useful output, and they are counted.
+4. For a finding in one of six repair families, the engine writes a patch and then shows it is a
+   repair. Five families are shown by execution: a regression test that fails on the original tree
+   and passes on the repaired one. A workflow cannot be shown that way, so it is shown by static
+   assertion instead: the rule that flagged the line no longer matches, nothing else in the file
+   changed, and nothing ran. The engine refuses rather than guessing, and the refusal reasons are
+   the useful output, and they are counted.
 5. What survives is posted: an inline comment per finding, a suggestion block per proven fix, and
    one check run. A re-run edits its own previous comments rather than posting beside them.
 
