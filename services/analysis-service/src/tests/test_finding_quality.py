@@ -163,3 +163,107 @@ class TestWeakPasswordHashClustering:
         """dvna's `md5(req.query.login)` reset token is a weak cipher, not a password hash."""
         finding = self._tier1("    const token = md5(req.query.login).digest();")
         assert finding["internal_type"] == "weak_cipher_algorithm"
+
+
+# The two workflow rules that can both fire on one `actions/checkout` step. Unlike the classes
+# above, this is not two detectors agreeing on one flaw: the rules describe different flaws, one of
+# which exists only because of the other. `cluster_findings` will not merge them, because they
+# carry different internal types, so the reconciliation is the directional fold in
+# `_apply_subsumption` and the table it reads, `SUBSUMED_INTERNAL_TYPES`.
+#
+# The integrated path, over real scanner output on real workflow files, is
+# `benchmarks/tier2-precision/cases.json`. What is here is the edges of the rule the table states:
+# the direction, the distance, and what the fold is not allowed to change.
+class TestCredentialPersistenceFoldsIntoUntrustedCheckout:
+    FILE = ".github/workflows/fixup.yml"
+
+    def _checkout(self, line=10):
+        return {
+            "rule_id": "opengrep.cwe-829.gha-untrusted-checkout-privileged-trigger",
+            "internal_type": "untrusted_code_checkout",
+            "file_path": self.FILE,
+            "line_start": line,
+            "line_end": line,
+            "severity": "critical",
+            "confidence": 0.9,
+            "code_snippet": "          ref: ${{ github.event.pull_request.head.ref }}",
+            "description": "This workflow checks out the pull request's own revision.",
+            "taxonomy_mappings": {"cwe": ["CWE-829"], "owasp": ["A08:2021"]},
+        }
+
+    def _persist(self, line=11, path=None):
+        return {
+            "rule_id": "opengrep.cwe-522.gha-persist-credentials-on-untrusted-checkout",
+            "internal_type": "workflow_credential_persistence",
+            "file_path": path or self.FILE,
+            "line_start": line,
+            "line_end": line,
+            "severity": "high",
+            "confidence": 0.85,
+            "code_snippet": "          persist-credentials: true",
+            "description": "This checkout keeps the job's token in `.git/config`.",
+            "taxonomy_mappings": {"cwe": ["CWE-522"], "owasp": ["A07:2021"]},
+        }
+
+    def test_one_finding_survives_and_it_is_the_checkout(self):
+        """The survivor is pinned by the table, not chosen by severity or confidence."""
+        clustered = cluster_findings([self._persist(), self._checkout()])
+
+        assert len(clustered) == 1
+        assert clustered[0]["rule_id"] == self._checkout()["rule_id"]
+
+    def test_the_survivor_still_records_that_both_rules_matched(self):
+        clustered = cluster_findings([self._checkout(), self._persist()])
+        survivor = clustered[0]
+
+        assert survivor["merged_rule_ids"] == [self._checkout()["rule_id"], self._persist()["rule_id"]]
+        # The extras map is the one place on a finding that crosses the gRPC contract intact.
+        assert survivor["evidence_details"]["extra"]["merged_rule_ids"] == survivor["merged_rule_ids"]
+        assert self._persist()["rule_id"] in survivor["evidence"]
+
+    def test_folding_does_not_raise_confidence(self):
+        """Two detectors agreeing is evidence. A consequence agreeing with its cause is not."""
+        clustered = cluster_findings([self._checkout(), self._persist()])
+
+        assert clustered[0]["confidence"] == self._checkout()["confidence"]
+
+    def test_persist_credentials_alone_still_gets_its_own_finding(self):
+        """An ordinary `pull_request` workflow: nothing subsumes it, so the one line is the fix."""
+        clustered = cluster_findings([self._persist()])
+
+        assert len(clustered) == 1
+        assert clustered[0]["rule_id"] == self._persist()["rule_id"]
+        assert "merged_rule_ids" not in clustered[0]
+
+    def test_the_fold_is_one_directional(self):
+        """The checkout finding is never dropped in favour of the credential one.
+
+        Stop persisting the credential and the untrusted checkout is still there, so the reverse
+        of this table entry is not true and must not be inferred from it.
+        """
+        clustered = cluster_findings([self._persist(), self._checkout()])
+
+        assert {finding["rule_id"] for finding in clustered} == {self._checkout()["rule_id"]}
+
+    def test_a_credential_finding_in_another_file_is_left_alone(self):
+        clustered = cluster_findings(
+            [self._checkout(), self._persist(path=".github/workflows/release.yml")]
+        )
+
+        assert len(clustered) == 2
+        assert all("merged_rule_ids" not in finding for finding in clustered)
+
+    def test_a_credential_finding_in_a_different_step_is_left_alone(self):
+        """Far enough away to be another checkout step, which is another finding."""
+        clustered = cluster_findings([self._checkout(line=10), self._persist(line=40)])
+
+        assert len(clustered) == 2
+        assert all("merged_rule_ids" not in finding for finding in clustered)
+
+    def test_an_unrelated_pair_of_findings_is_untouched(self):
+        """The table is consulted, and nothing else changes shape because it exists."""
+        other = {**self._persist(), "internal_type": "workflow_secret_exposure",
+                 "rule_id": "opengrep.cwe-200.gha-secret-in-untrusted-checkout-job"}
+        clustered = cluster_findings([self._checkout(), other])
+
+        assert len(clustered) == 2

@@ -1058,10 +1058,34 @@
       "code": "name: comment\non:\n  pull_request_target:\n    types: [opened]\npermissions:\n  contents: write\njobs:\n  comment:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
     },
     {
-      "id": "cwe-522.gha-persist-credentials-under-privileged-trigger",
+      "id": "cwe-522.gha-persist-credentials-on-untrusted-checkout",
       "expect": "finding",
-      "rule": "cwe-522.gha-persist-credentials-under-privileged-trigger",
+      "rule": "cwe-522.gha-persist-credentials-on-untrusted-checkout",
       "path": ".github/workflows/positive-persist-credentials.yml",
+      "note": "The shape this rule owns alone: an ordinary `pull_request` job that checks out the head branch and keeps the token so it can push a formatting commit back. The untrusted-checkout rule needs a privileged trigger and there is none, so nothing subsumes this and the one line is the whole fix.",
+      "posted": [
+        {
+          "rule": "cwe-522.gha-persist-credentials-on-untrusted-checkout",
+          "merged_rule_ids": null
+        }
+      ],
+      "code": "name: format\non:\n  pull_request:\n    types: [synchronize]\njobs:\n  format:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.head_ref }}\n          persist-credentials: true\n"
+    },
+    {
+      "id": "subsumption.persist-credentials-folded-into-untrusted-checkout",
+      "expect": "finding",
+      "rule": "cwe-829.gha-untrusted-checkout-privileged-trigger",
+      "path": ".github/workflows/subsumption-persist-credentials-under-target.yml",
+      "note": "One `actions/checkout` step both rules match. The token is only exposed because the step took a contributor's revision, and removing the step removes both, so `finding_quality.SUBSUMED_INTERNAL_TYPES` folds the credential finding into the checkout finding. One comment arrives, carrying both rule ids.",
+      "posted": [
+        {
+          "rule": "cwe-829.gha-untrusted-checkout-privileged-trigger",
+          "merged_rule_ids": [
+            "opengrep.cwe-829.gha-untrusted-checkout-privileged-trigger",
+            "opengrep.cwe-522.gha-persist-credentials-on-untrusted-checkout"
+          ]
+        }
+      ],
       "code": "name: fixup\non:\n  pull_request_target:\n    types: [synchronize]\njobs:\n  fixup:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.ref }}\n          persist-credentials: true\n"
     },
     {

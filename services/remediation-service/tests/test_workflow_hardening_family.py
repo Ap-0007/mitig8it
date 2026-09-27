@@ -385,7 +385,7 @@ class TestTheShapesThatAreNotAnEdit:
             ("opengrep.cwe-829.gha-untrusted-checkout-privileged-trigger", "untrusted_code_checkout"),
             ("opengrep.cwe-829.gha-build-step-under-privileged-trigger", "untrusted_build_execution"),
             ("opengrep.cwe-732.gha-permissions-write-all", "excessive_workflow_permissions"),
-            ("opengrep.cwe-522.gha-persist-credentials-under-privileged-trigger", "workflow_credential_persistence"),
+            ("opengrep.cwe-522.gha-persist-credentials-on-untrusted-checkout", "workflow_credential_persistence"),
             ("opengrep.cwe-200.gha-secret-in-untrusted-checkout-job", "workflow_secret_exposure"),
             ("opengrep.cwe-668.gha-self-hosted-runner-fork-trigger", "self_hosted_runner_exposure"),
         ],

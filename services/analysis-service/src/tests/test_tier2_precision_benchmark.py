@@ -18,8 +18,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from finding_quality import cluster_findings
 from main import partition_by_posting_policy
 from opengrep_runner import RULES_DIR, load_rule_metadata, quarantined_rule_ids, run_opengrep
+from test_code_scope import classify_findings
 
 CASES_PATH = Path(__file__).resolve().parents[4] / "benchmarks" / "tier2-precision" / "cases.json"
 
@@ -49,16 +51,27 @@ def _cases() -> list[dict]:
 
 
 @pytest.fixture(scope="module")
-def scan() -> dict[str, set[str]]:
-    """Rule ids that fired, keyed by fixture path."""
+def scan_findings() -> dict[str, list[dict]]:
+    """Whole findings, keyed by fixture path, from the one scanner pass.
+
+    `scan` below reduces these to rule ids, which is all most of the file asks. The findings
+    themselves are kept because a `posted` case is a claim about what survives the
+    reconciliation, and that needs the line numbers and internal types, not just the ids.
+    """
     files = [
         {"path": case["path"], "content": case["code"], "patch": "", "reviewable_line_spans": []}
         for case in _cases()
     ]
-    hits: dict[str, set[str]] = {case["path"]: set() for case in _cases()}
+    hits: dict[str, list[dict]] = {case["path"]: [] for case in _cases()}
     for finding in run_opengrep(files):
-        hits.setdefault(finding["file_path"], set()).add(finding["rule_id"])
+        hits.setdefault(finding["file_path"], []).append(finding)
     return hits
+
+
+@pytest.fixture(scope="module")
+def scan(scan_findings) -> dict[str, set[str]]:
+    """Rule ids that fired, keyed by fixture path."""
+    return {path: {finding["rule_id"] for finding in findings} for path, findings in scan_findings.items()}
 
 
 class TestCaseFile:
@@ -133,6 +146,61 @@ class TestAQuarantinedRuleNeverPosts:
         # And the removal is real rather than a relabelling: what was dropped is exactly the
         # quarantined matches, so no posting rule was lost with them.
         assert {f["rule_id"] for f in withheld} <= quarantined
+
+
+class TestWhatIsPosted:
+    """A `posted` case checks the comments a reviewer receives, not the rules that matched.
+
+    Every other class here stops at the scanner. That is the wrong altitude for a rule whose
+    findings are reconciled against another rule's afterwards: two rules can both be right about
+    one `actions/checkout` step, and what the benchmark has to pin down is that the step draws one
+    comment rather than two. So these cases replay the production order from
+    `main.analyze_*`: the posting policy first, then the test-code classification, then
+    `cluster_findings`, whose last act is the directional fold in
+    `finding_quality._apply_subsumption`.
+    """
+
+    @staticmethod
+    def _posted(findings: list[dict]) -> list[dict]:
+        postable, _ = partition_by_posting_policy(findings)
+        return cluster_findings(classify_findings(postable))
+
+    @pytest.mark.parametrize("case", [c for c in _cases() if c.get("posted")], ids=lambda c: c["id"])
+    def test_the_expected_findings_reach_the_reviewer(self, case, scan_findings):
+        posted = self._posted(scan_findings[case["path"]])
+        expected = case["posted"]
+
+        assert [finding["rule_id"] for finding in posted] == [
+            f"opengrep.{entry['rule']}" for entry in expected
+        ], f"{case['id']}: the fixture posted {[f['rule_id'] for f in posted]}"
+
+        for finding, entry in zip(posted, expected):
+            if entry["merged_rule_ids"] is None:
+                assert "merged_rule_ids" not in finding, (
+                    f"{case['id']}: {finding['rule_id']} was reconciled with something, and this "
+                    "case says it fires on its own"
+                )
+                continue
+            assert finding["merged_rule_ids"] == entry["merged_rule_ids"]
+            # The union has to survive the gRPC contract, and `evidence_details.extra` is the one
+            # map on a finding that does. Remediation reads the rule ids from there.
+            assert finding["evidence_details"]["extra"]["merged_rule_ids"] == entry["merged_rule_ids"]
+
+    @pytest.mark.parametrize("case", [c for c in _cases() if c.get("posted")], ids=lambda c: c["id"])
+    def test_every_rule_that_matched_is_named_by_something_posted(self, case, scan_findings):
+        """Nothing is folded away silently.
+
+        A rule dropped by the reconciliation still has to appear in a survivor's
+        `merged_rule_ids`, because the evidence is the only record that it matched.
+        """
+        matched = {finding["rule_id"] for finding in scan_findings[case["path"]]}
+        posted = self._posted(scan_findings[case["path"]])
+        accounted = {
+            rule_id
+            for finding in posted
+            for rule_id in (finding.get("merged_rule_ids") or [finding["rule_id"]])
+        }
+        assert matched <= accounted, f"{case['id']}: {sorted(matched - accounted)} vanished"
 
 
 class TestNoFindingLines:

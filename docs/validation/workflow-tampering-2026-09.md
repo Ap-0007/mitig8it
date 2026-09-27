@@ -56,7 +56,7 @@ file's `sample.workflow_tampering_pass_2026_09_27`.
 | `cwe-829.gha-untrusted-checkout-privileged-trigger` | 0 | n/a | n/a | n/a | n/a | Posts: zero findings, literal constructs, clear taxonomy |
 | `cwe-829.gha-build-step-under-privileged-trigger` | 0 | n/a | n/a | n/a | n/a | Posts: zero findings, literal constructs, clear taxonomy |
 | `cwe-732.gha-permissions-write-all` | 0 | n/a | n/a | n/a | n/a | Posts: zero findings, one literal key and value |
-| `cwe-522.gha-persist-credentials-under-privileged-trigger` | 0 | n/a | n/a | n/a | n/a | Posts: zero findings, three literal keys in one step |
+| `cwe-522.gha-persist-credentials-on-untrusted-checkout` | 0 | n/a | n/a | n/a | n/a | Posts: zero findings, two literal keys in one step. Widened after the measurement, see below |
 | `cwe-668.gha-self-hosted-runner-fork-trigger` | 0 | n/a | n/a | n/a | n/a | **Quarantined**: true only if the repository is public, which the pattern cannot see |
 
 The "→ 0" rows are rules whose measured findings were all read, all false, and the pattern then
@@ -64,6 +64,29 @@ narrowed; the number after the arrow is what the narrowed pattern produces over 
 Both rules post under the second clause of the posting policy, and the lines they were narrowed
 away from are checked in as no-finding cases in `benchmarks/tier2-precision/cases.json`, so neither
 narrowing can be undone silently.
+
+## The credential rule was widened after this measurement
+
+`cwe-522.gha-persist-credentials-on-untrusted-checkout` was measured as
+`cwe-522.gha-persist-credentials-under-privileged-trigger`, which asked for three things: a
+`pull_request_target` or `workflow_run` trigger, an untrusted `ref:`, and `persist-credentials:
+true` within six lines of it. In that form it could not post anything the checkout rule did not
+already post. Every input that satisfied all three satisfied
+`cwe-829.gha-untrusted-checkout-privileged-trigger` too, which needs only the first two, so once
+the pair is reconciled and the credential finding folds into the checkout finding (see
+`finding_quality.SUBSUMED_INTERNAL_TYPES`) the rule would never reach a reviewer at all.
+
+So the trigger requirement was dropped. What the rule now owns on its own is the case the checkout
+rule does not reach: an ordinary `pull_request` workflow that checks out the head branch and keeps
+the token, the usual shape of a job that pushes a formatting commit back to a contributor's branch.
+There the fix is the one line, not the step, which is why it is worth a comment of its own.
+
+This widening is not measured. The replay reads GitHub and has not been re-run, and dropping a
+conjunct can only widen, so the zero above is a lower bound on the new pattern and not a precision
+figure for it. Both shapes are pinned in `benchmarks/tier2-precision/cases.json` -- the pair that
+folds into one comment, and the `pull_request` workflow that fires alone -- so the reconciliation
+and the widening cannot be undone silently. The next replay is what turns the zero into a
+measurement of the rule as it now stands.
 
 The five rules that never fired post under the same clause the 87 rules in
 [tier2-coverage-2026-09.md](tier2-coverage-2026-09.md) posted under, and it costs the same thing

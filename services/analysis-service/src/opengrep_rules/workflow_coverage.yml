@@ -276,24 +276,32 @@ rules:
 
   # ── Credentials and secrets left where untrusted code can read them ────────
 
-  - id: cwe-522.gha-persist-credentials-under-privileged-trigger
+  - id: cwe-522.gha-persist-credentials-on-untrusted-checkout
     # `actions/checkout` writes the job's token into `.git/config` unless
-    # `persist-credentials: false` is set. Under a privileged trigger that token is the base
-    # repository's, and anything the job runs afterwards can read the file and push with it.
+    # `persist-credentials: false` is set, so a step that checks out a contributor's revision and
+    # persists credentials hands that token to code the contributor wrote.
     #
     # The `persist-credentials` key and the untrusted `ref:` must be within six lines of each
-    # other, in either order, because what makes this a finding is that they are the same
-    # checkout step. An earlier version asked only for the trigger, and that is the shape that
-    # made `cwe-732.gha-write-permission-under-privileged-trigger` worthless: a workflow that
-    # persists credentials in a trusted checkout is doing something legitimate.
+    # other, in either order, because what makes this a finding is that they are the same checkout
+    # step. An earlier version asked only for the trigger, and that is the shape that made
+    # `cwe-732.gha-write-permission-under-privileged-trigger` worthless: a workflow that persists
+    # credentials in a *trusted* checkout is doing something legitimate.
+    #
+    # It deliberately does *not* ask for the trigger, and that is what the rule is for now.
+    # `cwe-829.gha-untrusted-checkout-privileged-trigger` owns the privileged-trigger case and
+    # says the whole step should go, and `finding_quality.SUBSUMED_INTERNAL_TYPES` folds this
+    # rule's finding into that one when both fire, so the pair is one comment. What is left for
+    # this rule alone is the other half: an ordinary `pull_request` workflow that checks out the
+    # head branch and keeps the token, which is the usual shape of a job that pushes a formatting
+    # commit back to a contributor's branch. There the fix is this one line, not the step.
     pattern-either:
-      - pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request_target|workflow_run)[ \t]*:.*?^[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)[^\n]*\n(?:[^\n]*\n){0,6}?\K[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true'
-      - pattern-regex: '(?ms)^[ \t]{0,4}(?:pull_request_target|workflow_run)[ \t]*:.*?\K^[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true[^\n]*\n(?:[^\n]*\n){0,6}?[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)'
+      - pattern-regex: '(?ms)^[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)[^\n]*\n(?:[^\n]*\n){0,6}?\K[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true'
+      - pattern-regex: '(?ms)^[ \t]*persist-credentials[ \t]*:[ \t]*(?:''|")?true[^\n]*\n(?:[^\n]*\n){0,6}?[ \t]*ref[ \t]*:[ \t]*(?:''|")?(?:\$\{\{[ \t]*github\.event\.pull_request\.(?:head\.(?:sha|ref)|merge_commit_sha)|\$\{\{[ \t]*github\.event\.workflow_run\.head_(?:sha|branch)|\$\{\{[ \t]*github\.head_ref|refs/pull/)'
     message: >-
-      This checkout takes a contributor's revision and keeps the job's token in `.git/config`.
-      Under this trigger that token belongs to the base repository, so any command the job runs
-      afterwards can read it and push with it. Set `persist-credentials: false`, and check out
-      the base revision instead.
+      This checkout takes a contributor's revision and keeps the job's token in `.git/config`,
+      where any command the job runs afterwards can read it and push with it. Set
+      `persist-credentials: false` on this step, and give the job that does need to push its own
+      step with a token scoped to what it pushes.
     severity: ERROR
     languages: [generic]
     paths:
@@ -305,11 +313,15 @@ rules:
       internal_type: "workflow_credential_persistence"
       confidence: "0.85"
       precision_evidence: >-
-        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files
-        from 27 repositories. Posts under the second clause of the policy: three literal keys
-        in one checkout step, no data-flow assumption. The narrowing to the same step was made
-        before any measurement, on the evidence of the write-permission rule in this file,
-        which asked only for the trigger and scored 0.00.
+        docs/validation/workflow-tampering-2026-09.md: zero findings over 240 workflow files from
+        27 repositories. That measurement was made while the pattern also required a privileged
+        trigger, so it describes a subset of what this rule now matches and is a lower bound on
+        the widened form rather than a measurement of it; the replay reads GitHub and has not been
+        re-run. Posts under the second clause of the policy: two literal keys in one checkout
+        step, no data-flow assumption. The narrowing to the same step was made before any
+        measurement, on the evidence of the write-permission rule in this file, which asked only
+        for the trigger and scored 0.00, and it is what keeps the widened form honest: a persisted
+        credential on a *trusted* checkout is legitimate and is not matched.
       posting: post
 
   - id: cwe-200.gha-secret-in-untrusted-checkout-job
