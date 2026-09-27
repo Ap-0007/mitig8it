@@ -574,9 +574,14 @@ async function fetchRemediationSnapshot(payload) {
     throw new OperationError('Repository tree exceeds supported snapshot limits', 422);
   }
   const entries = tree.data.tree.map(({ path, mode, type, sha }) => ({ path, mode, type, sha }));
+  // A workflow is selected by path, not by suffix: the workflow_hardening family repairs
+  // `.github/workflows/*.yml`, and a `.yml` file anywhere else is ordinary YAML this
+  // snapshot has no reason to carry. Mirrors WORKFLOW_DIRECTORY in the repair service's
+  // families.py and in the control plane's remediationLanguages.js.
+  const isWorkflowPath = path => /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i.test(path);
   const sources = tree.data.tree.filter(entry => entry.type === 'blob' && ['100644', '100755'].includes(entry.mode)
     && !/(^|\/)(node_modules|dist|vendor|\.git|coverage)\//.test(entry.path)
-    && (/\.(js|jsx|ts|tsx|json|py|pyi|toml|txt|cfg|ini)$/.test(entry.path))
+    && (/\.(js|jsx|ts|tsx|json|py|pyi|toml|txt|cfg|ini)$/.test(entry.path) || isWorkflowPath(entry.path))
     && !/(^|\/)(\.env|credentials|secrets)(\.|\/|$)/i.test(entry.path));
   const requestedPaths = [...new Set(Array.isArray(payload.finding_paths) ? payload.finding_paths : [])];
   if (requestedPaths.length > 200) {
