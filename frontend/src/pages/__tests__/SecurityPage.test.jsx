@@ -68,7 +68,17 @@ describe('SecurityPage', () => {
       screen.getByText(/development-grade local sandbox, without kernel isolation/i)
     ).toBeInTheDocument()
     expect(screen.getByText('Prove')).toBeInTheDocument()
-    expect(screen.getByText('Regression test in a sandbox')).toBeInTheDocument()
+    expect(screen.getByText('Regression test in a sandbox, or a static assertion')).toBeInTheDocument()
+  })
+
+  // The weakest level is on this page too, because a page that says how a fix is verified must
+  // say that some fixes were not executed at all.
+  it('says that some fixes carry the weaker static assertion and what it leaves out', () => {
+    renderPage()
+
+    expect(screen.getByText(/nothing was executed/i)).toBeInTheDocument()
+    expect(screen.getByText(/no other rule started matching it/i)).toBeInTheDocument()
+    expect(screen.getByText(/less than a test result/i)).toBeInTheDocument()
   })
 
   it('advertises nothing as in progress or coming soon', () => {

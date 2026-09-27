@@ -232,8 +232,51 @@ def render_pairs(documents: list[dict[str, Any]]) -> str:
         f"| Findings the service writes a proof for | {totals['proof']} |",
         f"| Findings with both halves | {totals['both']} |",
         f"| Pairs that verify end to end | {totals['verified']} |",
+        f"| Findings with a patch and no proof, so the static assertion is the only route | {totals['assertable']} |",
+        f"| Those the static assertion carries | {totals['asserted']} |",
+        "",
+        f"A verified fix at any level is therefore {totals['verified']} executed plus "
+        f"{totals['asserted']} asserted, which is {totals['verified'] + totals['asserted']} of "
+        f"{totals['supported']}. The two are separate columns because they are separate claims: an "
+        "executed pair says a test failed before the change and passed after it, and an assertion "
+        "says only that the rule that fired no longer fires, that no other rule started firing, "
+        "that nothing else in the file changed, and that nothing was executed.",
     ]
-    return "\n".join(lines + reach + render_installs(documents) + render_proof_reasons(documents))
+    return "\n".join(lines + reach + render_assertions(documents) + render_installs(documents) + render_proof_reasons(documents))
+
+
+def render_assertions(documents: list[dict[str, Any]]) -> list[str]:
+    """Every finding the static assertion was tried on, and what each clause decided.
+
+    Separate from the pair table above and never merged into it: a row here had no proof at all,
+    so there is no original tree outcome and no patched tree outcome to report.
+    """
+    rows = [row for row in pair_rows(documents) if row.get("assertion")]
+    if not rows:
+        return []
+    lines = [
+        "",
+        "### The static assertion, per finding",
+        "",
+        "| Repository | Path | Family | Why not executed | Outcome |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in sorted(rows, key=lambda item: (item["repo"], item["path"], item.get("line_start") or 0)):
+        assertion = row["assertion"]
+        reason = str(assertion.get("static_assertion_reason") or "")
+        reason = reason[len("execution_not_available:"):] if reason.startswith("execution_not_available:") else reason
+        lines.append(
+            f"| `{_cell(row['repo'])}` | `{_cell(row['path'])}:{_cell(row.get('line_start'))}` "
+            f"| `{_cell(row['family'])}` | `{_cell(reason)}` "
+            f"| {'asserted' if assertion.get('asserted') else '`' + _cell(assertion.get('reason')) + '`'} |"
+        )
+    refusals = Counter(
+        str(row["assertion"].get("reason")) for row in rows if not row["assertion"].get("asserted")
+    )
+    if refusals:
+        lines.extend(["", "| Refusal | Count |", "| --- | ---: |"])
+        lines.extend(f"| `{_cell(reason)}` | {count} |" for reason, count in refusals.most_common())
+    return lines
 
 
 def render_installs(documents: list[dict[str, Any]]) -> list[str]:

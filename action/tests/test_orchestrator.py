@@ -592,8 +592,11 @@ def test_a_viewer_call_that_answers_is_still_used(api):
 def test_the_scope_report_separates_what_was_analysed_from_what_was_not():
     """"12 files in scope" counted the workflow the pull request adds and the README it edits.
 
-    Neither is a file a security rule reads whole, and nothing said which files had been
-    dropped or why, although action/README.md promised the check summary would.
+    At the time neither was a file a security rule read whole, and nothing said which files had
+    been dropped or why, although action/README.md promised the check summary would. The workflow
+    has since become one of the files that is read whole, so it counts as analysed here; the
+    README and the minified bundle are still the patch-only half, which is the distinction this
+    report exists to draw.
     """
     files = [
         {"filename": "app/routes/index.js", "status": "modified", "patch": "@@ -1 +1 @@\n+a\n"},
@@ -607,14 +610,17 @@ def test_the_scope_report_separates_what_was_analysed_from_what_was_not():
     report = pr_scope.scope_report(files)
 
     assert report["changed"] == 5, "removed files and vendored paths are not part of the review"
-    assert report["analysed"] == 2, "the JavaScript route and the template, not the YAML or the README"
-    assert report["skipped"] == 3
+    assert report["analysed"] == 3, (
+        "the JavaScript route, the template and the workflow; the workflow joined them when tier "
+        "2 gained rules for it, and the README and the minified bundle are still patch-only"
+    )
+    assert report["skipped"] == 2
     assert report["vendored"] == 1
     assert report["excluded"] == 0
 
     summary = pr_scope.scope_summary(report)
-    assert summary.startswith("2 files analysed")
-    assert "3 read as a patch only" in summary
+    assert summary.startswith("3 files analysed")
+    assert "2 read as a patch only" in summary
     assert "1 skipped as build output or a vendored dependency" in summary
     assert ".mitig8it.yml" not in summary, "nothing was excluded, so nothing is claimed"
 

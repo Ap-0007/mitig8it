@@ -574,9 +574,14 @@ async function fetchRemediationSnapshot(payload) {
     throw new OperationError('Repository tree exceeds supported snapshot limits', 422);
   }
   const entries = tree.data.tree.map(({ path, mode, type, sha }) => ({ path, mode, type, sha }));
+  // A workflow is selected by path, not by suffix: the workflow_hardening family repairs
+  // `.github/workflows/*.yml`, and a `.yml` file anywhere else is ordinary YAML this
+  // snapshot has no reason to carry. Mirrors WORKFLOW_DIRECTORY in the repair service's
+  // families.py and in the control plane's remediationLanguages.js.
+  const isWorkflowPath = path => /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i.test(path);
   const sources = tree.data.tree.filter(entry => entry.type === 'blob' && ['100644', '100755'].includes(entry.mode)
     && !/(^|\/)(node_modules|dist|vendor|\.git|coverage)\//.test(entry.path)
-    && (/\.(js|jsx|ts|tsx|json|py|pyi|toml|txt|cfg|ini)$/.test(entry.path))
+    && (/\.(js|jsx|ts|tsx|json|py|pyi|toml|txt|cfg|ini)$/.test(entry.path) || isWorkflowPath(entry.path))
     && !/(^|\/)(\.env|credentials|secrets)(\.|\/|$)/i.test(entry.path));
   const requestedPaths = [...new Set(Array.isArray(payload.finding_paths) ? payload.finding_paths : [])];
   if (requestedPaths.length > 200) {
@@ -919,7 +924,16 @@ const VERIFICATION_LEVEL_TEXT = {
   development_unverified: 'development sandbox',
 };
 
+// The one level where no test ran, so it cannot use the sentence above: that sentence claims a
+// regression test failed before the change and passed after it, and here there was no test.
+// `services/remediation-service/contracts/repair-v1.md` states the five clauses this sentence
+// summarizes, and it ends in the words clause 5 requires.
+const STATIC_ASSERTION_VERIFICATION_LEVEL = 'static_assertion';
+const STATIC_ASSERTION_VERIFIED_LINE = 'Verified: the rule that flagged this line no longer matches the patched file '
+  + 'and nothing else in the file changed. No code was executed.';
+
 function verifiedLine(section) {
+  if (section.verification_level === STATIC_ASSERTION_VERIFICATION_LEVEL) return STATIC_ASSERTION_VERIFIED_LINE;
   const where = VERIFICATION_LEVEL_TEXT[section.verification_level] || VERIFICATION_LEVEL_TEXT.development_unverified;
   return `Verified: regression test failed on the original code and passed with this change (${where}).`;
 }
@@ -950,10 +964,19 @@ function isImportHunk(hunk) {
 // run established, labelled apart so neither reads as the other, then the human-in-the-loop
 // sentence. Blank lines keep the Markdown rendering inside the HTML block.
 function detailsBlock(section, previewUrl) {
+  const asserted = section.verification_level === STATIC_ASSERTION_VERIFICATION_LEVEL;
+  // The fallbacks differ by level, because the executed one asserts a test result. A static
+  // assertion with an empty `proof` must not fall back to a sentence saying a test was run.
+  const proofFallback = asserted
+    ? 'the rule that produced this finding matched the original file at this line and matches no line of the patched file.'
+    : 'the generated regression test failed on the original code and passed on the fix.';
+  const evidenceFallback = asserted
+    ? 'no rule that was not already matching this file matches the patched file, and nothing outside this finding\'s own lines changed. No code was executed.'
+    : 'verification passed in the sandbox.';
   const lines = ['<details>', '<summary>Details</summary>', ''];
   if (section.stated_intent) lines.push(`**Model's stated intent:** ${section.stated_intent}`, '');
-  lines.push(`**Proof:** ${section.proof || 'the generated regression test failed on the original code and passed on the fix.'}`, '');
-  lines.push(`**Evidence:** ${section.evidence.length ? section.evidence.join(' ') : 'verification passed in the sandbox.'}`, '');
+  lines.push(`**Proof:** ${section.proof || proofFallback}`, '');
+  lines.push(`**Evidence:** ${section.evidence.length ? section.evidence.join(' ') : evidenceFallback}`, '');
   lines.push(`**Limitations:** ${section.limitations.length ? section.limitations.join('; ') : 'none reported.'}`, '');
   if (section.finding_ids.length > 1) lines.push(`**Findings covered:** ${findingIdList(section)}`, '');
   const preview = previewUrl ? ` or use Apply this fix in [Mitig8it](${previewUrl})` : '';

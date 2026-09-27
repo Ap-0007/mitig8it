@@ -13,6 +13,15 @@
     "secrets_pass_2026_09_27": {
       "description": "Hand verdicts on both signals of the secrets detector, over the eleven clean repositories, the 23 corpus trees and this repository's own tracked files. Every finding of both signals was read, so the seeded-sample rule was not needed: the signals produced 42 findings between them, 20 under `secret.format.known_key` and 22 under `secret.entropy.credential_assignment`. A finding is true when the value on the line is credential material a reviewer would act on in a security review of that line, and false when it is a published example or a local fixture that grants nothing. Three of the false positives were detector defects and are fixed in the same change; they keep their verdicts here and carry `no_longer_fires`.",
       "verdicts": 42
+    },
+    "workflow_tampering_pass_2026_09_27": {
+      "description": "Hand verdicts on the nine GitHub Actions workflow rules, measured over the `.github/workflows` directory of 27 repositories at pinned refs: the eleven clean replay repositories, the fifteen vulnerable-corpus repositories that have one, and this repository. 240 workflow files. Every finding was read where a rule produced ten or fewer; where it produced more, a seeded random ten was read and the seed is recorded here. Two of the verdict sets are on the pattern a rule was narrowed away from rather than on what it produces now, which is deliberate: the reading is what caused the narrowing, and the same lines are checked in as no-finding cases in benchmarks/tier2-precision/cases.json.",
+      "seed": 20260927,
+      "size": 10,
+      "workflow_files": 240,
+      "repositories": 27,
+      "verdicts": 31,
+      "write_up": "docs/validation/workflow-tampering-2026-09.md"
     }
   },
   "adjudications": [
@@ -1277,6 +1286,254 @@
       "sampled_as": "secrets_signal_every_finding",
       "fixed_by_exclusion": "unsigned_jwt",
       "no_longer_fires": true
+    },
+    {
+      "fingerprint": "aea0489e4f9fdd8c285c2a6544a46096550c2634e3ca23484276fce2e3f0f0c5",
+      "verdict": "true",
+      "note": "docker/login-action@v1 is a third-party action on a mutable major tag, and the same step is handed DOCKER_USERNAME and DOCKER_PASSWORD; moving v1 would hand those to whatever the new commit does",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "benbusby/whoogle-search .github/workflows/buildx.yml:28",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "220b364d4656b078711233f2a7b8ff3f516fbc65dc57cf40e9f66bb2b15acb78",
+      "verdict": "true",
+      "note": "pypa/gh-action-pypi-publish@master is a branch, not even a tag, in the step that receives TEST_PYPI_API_TOKEN",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "benbusby/whoogle-search .github/workflows/pypi.yml:36",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "fb61470fa253e534151a62e3c54cc7d1b7ef39411fcaa1ab60f2def61f107eb7",
+      "verdict": "true",
+      "note": "the same action on the same branch in the step that receives the real PYPI_API_TOKEN",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "benbusby/whoogle-search .github/workflows/pypi.yml:65",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "973ab68f64c3c78994645e8f8f09dfb93d8b9e2253b74ba97d6d93c0184e5552",
+      "verdict": "true",
+      "note": "GabrielBB/xvfb-action@v1 is one person's action on a mutable tag, running in a job that has the repository's build secrets",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "electerm/electerm .github/workflows/mac-test-3.yml:40",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "3011d8982af4a2e738feebe5c165b5e532cb3968464774917faad0d4cd2673e1",
+      "verdict": "true",
+      "note": "codecov/codecov-action@v7.1.0 is third-party and the tag is movable; the action is exactly the kind that has been compromised before",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "encode/django-rest-framework .github/workflows/main.yml:76",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "012364cc21c7b55e40a1a856baa17d41f06ead6038528eca8b1e41a25aa5118a",
+      "verdict": "true",
+      "note": "pypa/gh-action-pypi-publish@release/v1.14 is a branch reference in the job that publishes the package",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "encode/django-rest-framework .github/workflows/release.yml:84",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "262abae5bac2b888106766c17be81ae2e2c005de5b6b09f30190d4a22250bd5c",
+      "verdict": "true",
+      "note": "google-github-actions/setup-gcloud@master is a branch, and the step is given GOOGLE_APPLICATION_CREDENTIALS",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "google/slo-generator .github/workflows/build.yml:28",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "e7eb0e0a871f6997e19df4744a31e4cc08b60eb3dac0a98e76969aec61708f54",
+      "verdict": "true",
+      "note": "calibreapp/image-actions@main is a branch reference in a step handed a GITHUB_TOKEN that can push",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "juice-shop/juice-shop .github/workflows/image_actions.yml:33",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "1fd985738b19c5e38fd19f3106f6ca3d802833e589099c87bae715a348b647d8",
+      "verdict": "true",
+      "note": "qltysh/qlty-action/coverage@v2 is a third-party action on a movable major tag",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "webcomics/dosage .github/workflows/ci.yaml:44",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "40e9d93573c64b79d0a4411774cb1c907306a04bc682e1633a27c631ffb37c88",
+      "verdict": "true",
+      "note": "pypa/gh-action-pypi-publish@release/v1 is a branch reference in the publish job",
+      "rule_id": "opengrep.cwe-1357.gha-third-party-action-unpinned",
+      "where": "webcomics/dosage .github/workflows/publish.yaml:67",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "8a969dd7738494d5a740672c494bd5fd01d1569ffa011717df7a8b7b0c5fc9cb",
+      "verdict": "false",
+      "note": "the job's whole purpose is to update open pull request branches, so contents: write and pull-requests: write are the scopes it uses; nothing here is wider than needed",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "aicodesentry/mitig8it .github/workflows/auto-update-pr-branches.yml:13",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "ff769d9369a58fabfb7494374013023b24ec4574931c64f58280bdc93e4ba8b8",
+      "verdict": "false",
+      "note": "id-token: write is what mints the OIDC token for Google Workload Identity Federation; contents is already read",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "aicodesentry/mitig8it .github/workflows/deploy-analysis-cloudrun.yml:68",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "47033593569051a233891beeaaaa2469054098942dda558cebe0ac3c8164a944",
+      "verdict": "false",
+      "note": "the same OIDC token exchange in the api deploy job, with contents: read beside it",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "aicodesentry/mitig8it .github/workflows/deploy-api-cloudrun.yml:77",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "db5ac1499fdb2f1205fb732997199ee6ad69ecdfae9eb49f312f22410b840884",
+      "verdict": "false",
+      "note": "the same OIDC token exchange in the github-service deploy job",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "aicodesentry/mitig8it .github/workflows/deploy-github-cloudrun.yml:68",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "698645c46815fc9e954dff98b9e8e3292abfcc42052c47ac9056899340980e48",
+      "verdict": "false",
+      "note": "a backport job has to push a branch and open a pull request, so contents: write and pull-requests: write are the minimum it can run with",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "fastify/fastify .github/workflows/backport.yml:15",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "6c6d29510bf4f1fc8b1d6ca4f5116280315baff83bfa5e34b4399d5527b74236",
+      "verdict": "false",
+      "note": "id-token: write mints an OIDC token; contents and pull-requests are both read, which is the narrow block the rule's own message asks for",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "vercel/next.js .github/workflows/automated_code_review.yml:27",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "05441471d2de2d593dc9658d709e0b99d978283cce490cce293cd33a251af013",
+      "verdict": "false",
+      "note": "actions: write is the only scope that can re-run a failed workflow, which is all this workflow does",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "vercel/next.js .github/workflows/retry_deploy_test.yml:13",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "f8217e66796fbb6e4452fd6392241e783475c547c145c01868c0df626e032172",
+      "verdict": "false",
+      "note": "the same single actions: write scope for the same re-run job",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "vercel/next.js .github/workflows/retry_test.yml:16",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "77d186ba5d20fb679439cca563bbffeacd75f2913287447d2d6e74b0fc0d9d5d",
+      "verdict": "false",
+      "note": "actions: write is what dispatches the sync workflow; it is the job's one capability",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "vercel/next.js .github/workflows/sync_backport_canary_release.yml:125",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "2e198f628efd1f5b58754166a50c2277d23fdd5aacb8b962a77d787603b13672",
+      "verdict": "false",
+      "note": "id-token: write with a comment beside it saying why, and the workflow's header explains that workflow_run is used precisely so the trusted revision runs",
+      "rule_id": "opengrep.cwe-732.gha-write-permission-under-privileged-trigger",
+      "where": "vercel/next.js .github/workflows/upload_preview_tarballs.yml:17",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "cc17563ef6a15503aaa512499d24ef5efdeb743183fc8e0b0dd2b8c069e74a58",
+      "verdict": "false",
+      "note": "the interpolation is in an if: condition, not a shell script; pattern-inside run: ... had run past the end of the previous step",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/linux-deb-tar.yml:37",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "f56359bcfcee0da2d26343a77ec83de8065dd6bfa4c76ccd76465eca149a8e3a",
+      "verdict": "false",
+      "note": "the same if: condition in the rpm build workflow; an expression context is evaluated by Actions, never by a shell",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/linux-rpm-snap.yml:45",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "93cc34d5add5dfea7c67125d49afa5e45736bbc3b23de3825c8a56306c50bb10",
+      "verdict": "false",
+      "note": "the same if: condition, mac-10 build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/mac-10.yml:47",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "2376f9d5cbb8fe025a16e7c043f16a9653582a107935e0a3f53a938a819ca417",
+      "verdict": "false",
+      "note": "the same if: condition, mac-arm build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/mac-arm.yml:33",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "b626aafa341de4d9d4a39dc1b8b2514584a00c375d57be640bbde882550ed053",
+      "verdict": "false",
+      "note": "the same if: condition, mac build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/mac.yml:32",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "076b96c11c6af7527ab32b8185b410a687e089a408c8000e592b37033abde407",
+      "verdict": "false",
+      "note": "the same if: condition, win-loose build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/win-loose.yml:40",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "9939798d307d39b77c301ae534adbb88d31b682341eb3cccfb0b44b32f3b5a06",
+      "verdict": "false",
+      "note": "the same if: condition, win-nsis-arm build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/win-nsis-arm.yml:39",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "65333f5b72fb38e969439ccfcb34f4b232811071bec4ebf0d2223a402df9efba",
+      "verdict": "false",
+      "note": "the same if: condition, win-nsis build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/win-nsis.yml:40",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "e741bc69973cfa855ea387e39c0e8ff16b4745002b83ad7861413619557cb980",
+      "verdict": "false",
+      "note": "the same if: condition, win-portable build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/win-portable.yml:40",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "bce14ca2984ccb5035ce1793130b2dfda8636de2c98416fd831ef10438e87696",
+      "verdict": "false",
+      "note": "the same if: condition, win7-tar build",
+      "rule_id": "opengrep.cwe-78.gha-run-untrusted-interpolation",
+      "where": "electerm/electerm .github/workflows/win7-tar.yml:53",
+      "sampled_as": "workflow_tampering_2026_09_27"
+    },
+    {
+      "fingerprint": "c5de1eb42dce09803b08adfaff5cf8861aa27e05824bad823dcaf4654cdcf960",
+      "verdict": "false",
+      "note": "the ref: the rule read as an untrusted checkout is an input to tomchv/wait-my-workflow, not a checkout, and the workflow is triggered by push to master, so no contributor revision is present",
+      "rule_id": "opengrep.cwe-200.gha-secret-in-untrusted-checkout-job",
+      "where": "google/slo-generator .github/workflows/deploy.yml:58",
+      "sampled_as": "workflow_tampering_2026_09_27"
     }
   ]
 }

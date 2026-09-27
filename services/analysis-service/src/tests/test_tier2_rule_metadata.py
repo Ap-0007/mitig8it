@@ -21,17 +21,29 @@ from opengrep_runner import (
 )
 from taxonomy import DECLARED_INTERNAL_TYPES
 
-COVERAGE_FILES = ("javascript_coverage.yml", "python_coverage.yml", "template_coverage.yml")
+COVERAGE_FILES = (
+    "javascript_coverage.yml",
+    "python_coverage.yml",
+    "template_coverage.yml",
+    "workflow_coverage.yml",
+)
 
-# The five remediation families, as services/remediation-service/src/families.py names them,
-# and the CWE each one is derived from there by `rule_family()`. A rule that declares a
-# family its CWE does not produce would be handed to the engine as something else.
+# The remediation families, as services/remediation-service/src/families.py names them, and
+# the CWEs each one is derived from there by `rule_family()`. A rule that declares a family
+# its CWE does not produce would be handed to the engine as something else.
+#
+# `workflow_hardening` carries two, because the two shapes it can patch are two different
+# defects: CWE-78 for an interpolation inside a `run:` block, CWE-1357 for an action reference
+# that is not a digest. `rule_family()` resolves it from the finding's internal type before it
+# reaches the CWE table, precisely so that a CWE-78 workflow finding is not mistaken for the
+# `command_arguments` family.
 FAMILY_CWE = {
-    "sql_parameterization": "CWE-89",
-    "command_arguments": "CWE-78",
-    "path_containment": "CWE-22",
-    "hardcoded_credential": "CWE-798",
-    "code_injection_eval": "CWE-95",
+    "sql_parameterization": frozenset({"CWE-89"}),
+    "command_arguments": frozenset({"CWE-78"}),
+    "path_containment": frozenset({"CWE-22"}),
+    "hardcoded_credential": frozenset({"CWE-798"}),
+    "code_injection_eval": frozenset({"CWE-95"}),
+    "workflow_hardening": frozenset({"CWE-78", "CWE-1357"}),
 }
 
 
@@ -87,9 +99,9 @@ class TestRuleShape:
         if family is None:
             return
         assert family in FAMILY_CWE, f"{rule['id']} declares an unknown family {family!r}"
-        assert metadata.get("cwe") == FAMILY_CWE[family], (
+        assert metadata.get("cwe") in FAMILY_CWE[family], (
             f"{rule['id']} declares family {family!r} but CWE {metadata.get('cwe')!r}; "
-            "the remediation engine derives the family from the CWE, so the two would disagree"
+            "the remediation engine derives the family from the finding, so the two would disagree"
         )
 
     @pytest.mark.parametrize("rule", [rule for _, rule in COVERAGE_RULES], ids=IDS)

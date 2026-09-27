@@ -26,10 +26,15 @@ from test_code_scope import (
     CODE_EXTENSIONS,
     SUPPORTED_EXTENSIONS,
     TEMPLATE_EXTENSIONS,
+    WORKFLOW_DIRECTORY,
+    WORKFLOW_EXTENSIONS,
     classify_findings,
     is_analyzable_path,
     is_runtime_scannable_path as _is_runtime_scannable_path,
+    is_tier2_scannable_path,
+    is_workflow_path,
 )
+from workflow_action_digest import action_reference_evidence
 
 RULES_DIR = Path(__file__).parent / "opengrep_rules"
 
@@ -249,6 +254,21 @@ def _build_evidence_details(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "missing_control_type": metadata.get("missing_control_type"),
         "auto_fix_eligible": bool(metadata.get("auto_fix_eligible", False)),
     }
+
+
+UNPINNED_ACTION_RULE_ID = "cwe-1357.gha-third-party-action-unpinned"
+
+
+def _workflow_evidence_extra(check_id: str, code_snippet: str) -> Dict[str, Any]:
+    """Extra evidence a workflow finding carries for the repair side, or an empty mapping.
+
+    Only the unpinned-action rule needs it, and only because its repair depends on a fact that has
+    to be looked up while the product still has a network. Everything the injection repair needs is
+    already in the line it matched.
+    """
+    if check_id != UNPINNED_ACTION_RULE_ID:
+        return {}
+    return action_reference_evidence(str(code_snippet or "").split("\n")[0])
 
 
 def _normalize_trace_line(value: Any) -> Optional[int]:
@@ -563,6 +583,12 @@ def _enrich_metadata_from_match(
 # names the extensions it applies to in `paths: include`. A generic rule without that
 # include would read *every* file in the batch, `.py` and `.ts` alike, so the include is
 # what keeps the two sets apart.
+#
+# A GitHub Actions workflow is the third case and it is not an extension at all:
+# `WORKFLOW_EXTENSIONS` under `WORKFLOW_DIRECTORY`, decided by `is_tier2_scannable_path`.
+# `workflow_coverage.yml` reads those in `generic` mode too, and its includes name the
+# directory rather than the bare extension, because ordinary YAML elsewhere in a repository
+# is not a workflow and none of those rules is true of it.
 
 
 def _batch_limit(env_name: str, default: int) -> int:
@@ -781,8 +807,17 @@ def _classify_scanner_errors(
     return limitations
 
 
-def _run_semgrep(target_dir: str) -> Dict[str, Any]:
+def _run_semgrep(target_dir: str, config: Optional[str] = None) -> Dict[str, Any]:
     """Run one scanner process over one batch directory and return its output.
+
+    `config` is the rule set to run, defaulting to every rule this service carries. A static
+    assertion passes a one-rule config written beside the scan directory, so clause 1 and
+    clause 2 are decided by exactly the rule that produced the finding and by nothing else.
+
+    `--metrics=off` and `--disable-version-check` are the two things that would otherwise let
+    this process open a socket. The rules are local files, so the scanner had no reason to reach
+    a registry either way; saying so explicitly is what lets the static assertion claim it never
+    touched the network, and it costs the detection path nothing.
 
     Tolerable per-file scanner errors are attached to the returned output under
     `analysis_limitations`; fatal ones raise.
@@ -791,10 +826,12 @@ def _run_semgrep(target_dir: str) -> Dict[str, Any]:
         result = subprocess.run(
             [
                 "semgrep",
-                "--config", str(RULES_DIR),
+                "--config", config or str(RULES_DIR),
                 "--json",
                 "--no-git-ignore",
                 "--quiet",
+                "--metrics=off",
+                "--disable-version-check",
                 "--timeout", "30",
                 "--max-target-bytes", "500000",
                 target_dir,
@@ -882,6 +919,13 @@ def _build_finding(
     )
     evidence_details = _build_evidence_details(metadata)
     evidence_details["trace_steps"] = trace_steps
+    workflow_extra = _workflow_evidence_extra(check_id, code_snippet)
+    if workflow_extra:
+        # The repair service cannot resolve a digest itself: its sandbox has no egress, and that
+        # is the property the verification story rests on. So the reference, and the digest when a
+        # lookup answered, ride on the finding from here.
+        extra = evidence_details.get("extra")
+        evidence_details["extra"] = {**extra, **workflow_extra} if isinstance(extra, dict) else workflow_extra
 
     finding = {
         "rule_id": f"opengrep.{check_id}",
@@ -1020,7 +1064,7 @@ def run_opengrep_with_limitations(files: List[Dict[str, Any]]) -> tuple:
     scannable = [
         f for f in files
         if is_analyzable_path(f.get("path", ""))
-        and _file_extension(f.get("path", "")) in SUPPORTED_EXTENSIONS
+        and is_tier2_scannable_path(f.get("path", ""))
         and (f.get("patch") or f.get("content"))
     ]
 

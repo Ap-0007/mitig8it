@@ -1,0 +1,8 @@
+{
+  "name": "fixture-thumbnailer-js",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "js-yaml": "4.1.0"
+  }
+}

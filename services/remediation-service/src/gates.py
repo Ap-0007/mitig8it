@@ -12,9 +12,19 @@ import json
 import re
 from pathlib import PurePosixPath
 
-from .families import CODE_INJECTION_EVAL, COMMAND_ARGUMENTS, JAVASCRIPT, PYTHON, SQL_PARAMETERIZATION
+from .families import (
+    CODE_INJECTION_EVAL,
+    COMMAND_ARGUMENTS,
+    JAVASCRIPT,
+    PYTHON,
+    SQL_PARAMETERIZATION,
+    STATIC_ASSERTION,
+    WORKFLOW,
+    family_verification,
+)
 from .models import FindingSnapshot
 from .retrieval import Snapshot
+from .verification.verifier import STATIC_ASSERTION_VERIFICATION_LEVEL, VERIFICATION_LEVELS
 
 UNSUPPORTED_LANGUAGE_MESSAGE = (
     "The affected file is neither JavaScript/TypeScript nor Python, so no toolchain can check a repair of it."
@@ -28,6 +38,13 @@ AMBIGUOUS_QUERY_API_MESSAGE = (
     "The query is handed to a helper whose placeholder syntax the snapshot does not show: no "
     "sqlite3, psycopg, or SQLAlchemy execute() call takes it at the finding, so a parameterized "
     "rewrite cannot be chosen safely."
+)
+STATIC_ASSERTION_UNAVAILABLE_MESSAGE = (
+    "This repair can only be shown to work by static assertion -- the rule fires on the file "
+    "before the change and not after it, and nothing else in the file changed -- because no test "
+    "can demonstrate that a workflow is secure. That verification level is not available yet, so "
+    "the patch is withheld rather than published without evidence. The finding itself is reported "
+    "with the change to make."
 )
 DYNAMIC_CODE_MESSAGE = (
     "The site compiles a program rather than reading a value: new Function and the vm compile "
@@ -209,8 +226,27 @@ def python_shell_pipeline(snapshot: Snapshot, finding: FindingSnapshot) -> bool:
     return False
 
 
+def static_assertion_level_available() -> bool:
+    """Whether the verification level the workflow family needs has landed.
+
+    The level is `feat/static-assertion-verification`'s to implement. The name is declared in the
+    verifier so this question can be asked; membership in `VERIFICATION_LEVELS` is what makes it
+    real, and adding it there is what turns the workflow family on.
+    """
+    return STATIC_ASSERTION_VERIFICATION_LEVEL in VERIFICATION_LEVELS
+
+
 def static_gate(snapshot: Snapshot, finding: FindingSnapshot, family: str, language: str) -> tuple[str, str] | None:
     """The `(code, message)` this finding is skipped with, or None when the agent may attempt it."""
+    if family_verification(family) == STATIC_ASSERTION and not static_assertion_level_available():
+        # The patch side of this family is built and tested; what is missing is the only kind of
+        # proof it could ever have. Publishing it anyway would put an unverified patch in front of
+        # a maintainer under the same review as verified ones, so it is refused by name instead.
+        return "static_assertion_verification_unavailable", STATIC_ASSERTION_UNAVAILABLE_MESSAGE
+    if language == WORKFLOW:
+        # Nothing below applies: a workflow has no package manifest, no shell call and no
+        # compiled string. The only gate it has is the one above.
+        return None
     if language == JAVASCRIPT:
         if family == SQL_PARAMETERIZATION and not pg_dependency_proven(snapshot):
             return "pg_dependency_not_proven", PG_NOT_PROVEN_MESSAGE

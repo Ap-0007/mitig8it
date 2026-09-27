@@ -18,15 +18,70 @@ COMMAND_ARGUMENTS = "command_arguments"
 PATH_CONTAINMENT = "path_containment"
 HARDCODED_CREDENTIAL = "hardcoded_credential"
 CODE_INJECTION_EVAL = "code_injection_eval"
+# GitHub Actions workflow hardening. It is a family rather than part of another one because
+# what it repairs is not a program: the two shapes it can patch are a mutable action reference
+# and an expression interpolation inside a `run:` script, and neither has a call site, a
+# parameter list or a module to load.
+WORKFLOW_HARDENING = "workflow_hardening"
 
-ALL_FAMILIES = (SQL_PARAMETERIZATION, COMMAND_ARGUMENTS, PATH_CONTAINMENT, HARDCODED_CREDENTIAL, CODE_INJECTION_EVAL)
+ALL_FAMILIES = (
+    SQL_PARAMETERIZATION,
+    COMMAND_ARGUMENTS,
+    PATH_CONTAINMENT,
+    HARDCODED_CREDENTIAL,
+    CODE_INJECTION_EVAL,
+    WORKFLOW_HARDENING,
+)
+
+# The families the sandbox toolchains can repair *and prove by running a regression test*. This
+# is what `ALL_FAMILIES` used to mean, and it stopped meaning it when the workflow family
+# arrived: a workflow cannot be proven that way at all.
+SANDBOX_PROVEN_FAMILIES = (
+    SQL_PARAMETERIZATION,
+    COMMAND_ARGUMENTS,
+    PATH_CONTAINMENT,
+    HARDCODED_CREDENTIAL,
+    CODE_INJECTION_EVAL,
+)
 
 JAVASCRIPT = "javascript"
 PYTHON = "python"
-SUPPORTED_LANGUAGES = (JAVASCRIPT, PYTHON)
+# Not a programming language: the toolchain that "checks" a workflow is the scanner itself,
+# through the static assertion verification level. It is in this position because everything
+# downstream -- the family table, the grouping, the skip reasons -- is keyed by the affected
+# file's language, and a workflow needs its own key rather than a pretend Python one.
+WORKFLOW = "workflow"
+SUPPORTED_LANGUAGES = (JAVASCRIPT, PYTHON, WORKFLOW)
 
 JAVASCRIPT_SUFFIXES = frozenset({".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"})
 PYTHON_SUFFIXES = frozenset({".py"})
+WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
+# Mirrors WORKFLOW_DIRECTORY in services/analysis-service/src/test_code_scope.py. A `.yml` file
+# anywhere else is not a workflow and must not be handed to these templates.
+WORKFLOW_DIRECTORY = ".github/workflows/"
+
+# How a repair of each family is shown to be a repair.
+#
+# `sandbox_regression_test` is the original contract: a test that fails on the original tree and
+# passes on the patched one, run in the sandbox. `static_assertion` is the weaker level
+# `feat/static-assertion-verification` is adding: the rule that produced the finding fires on
+# the original file, does not fire on the patched file, and nothing else in the file changed. It
+# executes nothing.
+#
+# The workflow family can only ever use the second. No unit test can demonstrate that a
+# workflow is secure: the thing being repaired is a document GitHub interprets, there is no
+# module to load and no call to observe, and running the workflow would mean running CI.
+SANDBOX_REGRESSION_TEST = "sandbox_regression_test"
+STATIC_ASSERTION = "static_assertion"
+
+FAMILY_VERIFICATION: dict[str, str] = {
+    SQL_PARAMETERIZATION: SANDBOX_REGRESSION_TEST,
+    COMMAND_ARGUMENTS: SANDBOX_REGRESSION_TEST,
+    PATH_CONTAINMENT: SANDBOX_REGRESSION_TEST,
+    HARDCODED_CREDENTIAL: SANDBOX_REGRESSION_TEST,
+    CODE_INJECTION_EVAL: SANDBOX_REGRESSION_TEST,
+    WORKFLOW_HARDENING: STATIC_ASSERTION,
+}
 
 # The families each toolchain can repair and prove. A family is listed for a language only once
 # the harness can observe the repair: `hardcoded_credential` joined JavaScript when the Node
@@ -36,8 +91,9 @@ PYTHON_SUFFIXES = frozenset({".py"})
 # family; what still decides support per finding is the static gate, which refuses a site that
 # compiles a program rather than reading a value.
 LANGUAGE_FAMILIES: dict[str, frozenset[str]] = {
-    JAVASCRIPT: frozenset(ALL_FAMILIES),
-    PYTHON: frozenset(ALL_FAMILIES),
+    JAVASCRIPT: frozenset(SANDBOX_PROVEN_FAMILIES),
+    PYTHON: frozenset(SANDBOX_PROVEN_FAMILIES),
+    WORKFLOW: frozenset({WORKFLOW_HARDENING}),
 }
 
 # The assertion each family's regression test makes with the sandbox harness
@@ -105,8 +161,23 @@ PYTHON_FAMILY_ASSERTIONS: dict[str, str] = {
 }
 
 
+def is_workflow_path(path: str | None) -> bool:
+    """A GitHub Actions workflow: `.yml`/`.yaml` under a `.github/workflows/` path segment.
+
+    Mirrors `is_workflow_path` in services/analysis-service/src/test_code_scope.py. The
+    directory matters: a `.yml` anywhere else is a manifest, a compose file or another
+    provider's CI config, and none of the workflow templates is meaningful there.
+    """
+    if not path:
+        return False
+    normalized = str(path).replace("\\", "/").lower()
+    if PurePosixPath(normalized).suffix not in WORKFLOW_SUFFIXES:
+        return False
+    return normalized.startswith(WORKFLOW_DIRECTORY) or f"/{WORKFLOW_DIRECTORY}" in normalized
+
+
 def language_of_path(path: str | None) -> str | None:
-    """The toolchain a file belongs to, by extension, or None when neither can check it."""
+    """The toolchain a file belongs to, or None when nothing here can check it."""
     if not path:
         return None
     suffix = PurePosixPath(path).suffix.lower()
@@ -114,10 +185,39 @@ def language_of_path(path: str | None) -> str | None:
         return JAVASCRIPT
     if suffix in PYTHON_SUFFIXES:
         return PYTHON
+    if is_workflow_path(path):
+        return WORKFLOW
     return None
 
 
+def family_verification(family: str | None) -> str | None:
+    """How a repair of this family is shown to be a repair, or None for an unknown family."""
+    return FAMILY_VERIFICATION.get(family or "")
+
+
+def declares_static_assertion(family: str | None) -> bool:
+    """Whether this family's repairs are asserted statically by declaration.
+
+    One of the two routes to the `static_assertion` level, and the declared one: this is for a
+    family whose repair no regression test could demonstrate even in principle, which today is
+    `workflow_hardening`. `FAMILY_VERIFICATION` above is the declaration; the other route is a
+    family that *can* be executed, for a finding whose execution was refused for a reason the
+    evidence records. A family must never be declared here when a proof can drive its repair,
+    because that would trade an executed proof for a weaker one.
+    """
+    return family_verification(family) == STATIC_ASSERTION
+
+
 def family_assertion(family: str | None, language: str | None) -> str | None:
+    """The harness assertion a regression test for this family must make.
+
+    None for the workflow family, and that is the contract rather than an omission: the family
+    verifies by static assertion, so there is no harness, no test and nothing to assert. A
+    caller that reaches for an assertion here is about to build a proof for something a proof
+    cannot describe.
+    """
+    if family == WORKFLOW_HARDENING:
+        return None
     table = PYTHON_FAMILY_ASSERTIONS if language == PYTHON else FAMILY_ASSERTIONS
     return table.get(family or "")
 
@@ -129,8 +229,24 @@ def family_supported(family: str | None, language: str | None) -> bool:
 def rule_family(finding: Any) -> str | None:
     text = " ".join(
         str(value or "")
-        for value in (finding.rule_id, finding.cwe_id, finding.category, finding.title, finding.message)
+        for value in (
+            finding.rule_id,
+            finding.cwe_id,
+            finding.category,
+            finding.title,
+            finding.message,
+            # The finding model allows extra fields and the analysis service sends this one; it
+            # is the only field that names the vulnerability without ambiguity.
+            getattr(finding, "internal_type", "") or "",
+        )
     ).lower()
+    # The workflow family is resolved first, and from the rule rather than the CWE, because its
+    # CWEs are already taken. The shell-injection rule declares CWE-78, which the next block
+    # reads as `command_arguments`, and that family would hand a workflow to a template that
+    # rewrites a `child_process` call into an argument list. The internal type is unambiguous
+    # where the CWE is not.
+    if "workflow_script_injection" in text or "unpinned_action_reference" in text or ".gha-" in text:
+        return WORKFLOW_HARDENING
     if "cwe-89" in text or "sql injection" in text or "sql.injection" in text:
         return SQL_PARAMETERIZATION
     if "cwe-78" in text or "command injection" in text or "command.injection" in text:

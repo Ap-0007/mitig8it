@@ -201,7 +201,15 @@ function emptySection(finding) {
 
 // How much a fix is trusted, and how bad the finding is: the two orderings that decide
 // which of several candidates on the same lines keeps the suggestion.
-const VERIFICATION_RANK = { independent_sandbox: 2, development_unverified: 1 };
+//
+// The trust order is not written out here. It is derived from the repair service's own
+// weakest-first list, so a level added there can never rank below an unknown one by omission:
+// `isolated_job` used to be missing from this table and therefore ranked 0, below
+// `development_unverified`. Rank 0 is reserved for a level this control plane does not know,
+// which is the most cautious answer rather than the most flattering one.
+const VERIFICATION_RANK = Object.fromEntries(
+  policy.VERIFICATION_LEVEL_ORDER.map((level, index) => [level, index + 1]),
+);
 const SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, informational: 1 };
 
 function verificationRank(level) { return VERIFICATION_RANK[String(level || '').toLowerCase()] || 0; }

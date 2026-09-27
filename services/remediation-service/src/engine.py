@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 from typing import Any, Callable
 
@@ -10,7 +11,7 @@ from .agent import OpenAICompatibleProvider, ProviderError, RepairAgent
 from .agent.checkpoint import AgentCheckpointStore, GroupScopedCheckpointStore
 from .batch import BatchPolicyError, ImmutableBatch, build_immutable_batch
 from .digests import digest_json
-from .families import family_supported, language_of_path, rule_family
+from .families import declares_static_assertion, family_supported, language_of_path, rule_family
 from .gates import UNSUPPORTED_LANGUAGE_MESSAGE, static_gate
 from .git_tree import GitTreeError, compute_tree_oid, validate_snapshot_tree
 from .grouping import group_findings_by_language
@@ -29,8 +30,12 @@ from .sandbox import BrokerConfigurationError, create_sandbox_broker
 from .splitting import DEPENDENT_HUNK_UNPROVEN, split_hunks
 from .templates import MODEL, TEMPLATE, TemplateFallback, combine_templates, generate_template
 from . import telemetry
-from .verification import VerificationResult, Verifier
-from .verification.verifier import DEVELOPMENT_VERIFICATION_LEVEL, VERIFICATION_LEVELS
+from .verification import VerificationResult, Verifier, create_rule_oracle
+from .verification.verifier import (
+    DEVELOPMENT_VERIFICATION_LEVEL,
+    STATIC_ASSERTION_VERIFICATION_LEVEL,
+    VERIFICATION_LEVELS,
+)
 
 AgentFactory = Callable[[RepairRequest], RepairAgent]
 
@@ -48,6 +53,14 @@ BUDGET_EXHAUSTED_MESSAGE = (
 # this many verification attempts, funded from what the job has left.
 RETRY_ATTEMPTS = 2
 RETRY_SOURCE = "retry"
+# The pass that produces a `static_assertion` candidate. It runs last, over findings every
+# executed pass failed to prove, and only where the reason execution could not prove them is
+# recorded. It is never tried before the executed passes and never instead of one.
+STATIC_ASSERTION_SOURCE = "static_assertion"
+STATIC_ASSERTION_NOT_COMBINABLE = (
+    "This job also produced a candidate verified by execution, and a batch carries one kind of "
+    "evidence: the statically asserted candidate is not shipped beside it."
+)
 PROTECTED_PATH_MESSAGE = (
     "Policy will not change this file, so no repair of it could be applied. It is a test "
     "directory, a lock file, or a CI or infrastructure path."
@@ -167,6 +180,21 @@ def _aggregate_usage(outcomes: list[GroupOutcome]) -> dict[str, Any]:
     }
 
 
+def _level_permitted(level: str, policy: RepairPolicy) -> bool:
+    """Whether policy accepts a candidate carrying this verification level.
+
+    One function rather than a chain repeated per call site, because a level added to
+    `VERIFICATION_LEVELS` without a decision here would otherwise be silently accepted.
+    """
+    if level not in VERIFICATION_LEVELS:
+        return False
+    if level == DEVELOPMENT_VERIFICATION_LEVEL:
+        return policy.allow_development_verification
+    if level == STATIC_ASSERTION_VERIFICATION_LEVEL:
+        return policy.allow_static_assertion_verification
+    return True
+
+
 @dataclass(frozen=True)
 class CombinedVerification:
     bundle: PatchBundle
@@ -191,15 +219,38 @@ async def combine_and_verify(
     if len(entries) == 1:
         candidate, bundle, verification = entries[0]
         return CombinedVerification(bundle, candidate.verified_tree_oid, verification)
+    # A batch carries one kind of evidence, so either every entry here was asserted statically or
+    # none was; `repair` has already dropped the asserted ones when an executed candidate exists.
+    asserted_only = all(verification.verification_level == STATIC_ASSERTION_VERIFICATION_LEVEL for _, _, verification in entries)
     # Combining shells out for syntax and load checks and diffs every hunk pair, so it
     # runs off the loop: the worker's lease renewal shares this loop and a combine
-    # longer than the lease would otherwise lose the job mid-verification.
-    combined = await asyncio.to_thread(combine_patch_bundles, request, snapshot, [bundle for _, bundle, _ in entries])
+    # longer than the lease would otherwise lose the job mid-verification. An all-asserted batch
+    # combines without the load check, because requiring the union would execute repository code
+    # that no candidate in the batch claims was executed.
+    combined = await asyncio.to_thread(
+        functools.partial(combine_patch_bundles, load_checks=not asserted_only),
+        request,
+        snapshot,
+        [bundle for _, bundle, _ in entries],
+    )
     verified_tree_oid = compute_tree_oid(
         request.tree_entries,
         {patch.path: patch.replacement_content for patch in combined.patches},
     )
     claimed = {finding_id for candidate, _, _ in entries for finding_id in candidate.finding_ids}
+    if asserted_only:
+        # Every candidate here was asserted rather than executed, so the union is asserted too:
+        # a sandbox run over this tree would produce evidence no candidate in it claims. The
+        # combined assertion re-checks every claimed finding against the union, so a patch that
+        # only holds when applied alone does not ship. `repair` has already established that no
+        # executed candidate is in this batch, because a batch carries one kind of evidence.
+        narrowed = request.model_copy(
+            update={"findings": [finding for finding in request.findings if finding.stable_id in claimed]}
+        )
+        verification = await verifier.verify_static_assertion(
+            narrowed, snapshot, combined, reason="combined_static_assertion"
+        )
+        return CombinedVerification(combined, verified_tree_oid, verification)
     for candidate, _, verification in entries:
         if (
             candidate.verified_tree_oid == verified_tree_oid
@@ -490,6 +541,22 @@ def _agent_pass(source: str, request: RepairRequest, result: Any) -> _Pass:
     )
 
 
+def static_assertion_reason(family: str | None, proof_entry: str | None) -> str | None:
+    """Why this finding would be asserted statically rather than executed, or None.
+
+    Two routes, and only two. A family may declare it, which is for the categories no regression
+    test could ever cover. Otherwise the service has to have refused to write a proof for this
+    site, and then the refusal's own code is the recorded reason. A finding with a service proof
+    never reaches here: a repair that can be executed is executed.
+    """
+    if declares_static_assertion(family):
+        return "family_declares_static_assertion"
+    entry = str(proof_entry or "")
+    if entry.startswith("model:"):
+        return f"execution_not_available:{entry[len('model:'):]}"
+    return None
+
+
 def build_proofs(snapshot: Snapshot, findings: list[FindingSnapshot]) -> tuple[dict[str, GeneratedProof], dict[str, str]]:
     """The service-generated proof per finding, and per finding which path supplies its test."""
     proofs: dict[str, GeneratedProof] = {}
@@ -542,7 +609,9 @@ class RepairEngine:
         provider = OpenAICompatibleProvider.from_env(expected_model)
         provider.max_output_tokens = min(provider.max_output_tokens, request.policy.max_output_tokens_per_call)
         broker = create_sandbox_broker()
-        return RepairAgent(provider, Verifier(broker), checkpoints)
+        # The oracle is optional. A deployment with no analysis service reachable simply has no
+        # static assertion level available, and the verifier refuses rather than passes.
+        return RepairAgent(provider, Verifier(broker, create_rule_oracle()), checkpoints)
 
     async def _template_pass(
         self,
@@ -612,6 +681,101 @@ class RepairEngine:
             step["reason"] = str(verification.reason_code or "no_finding_proven")[:120]
             return _Pass(TEMPLATE, narrowed, verification.status if verification.status in ("unsupported", "inconclusive") else "inconclusive", proposal, bundle, verification, verification.reason_code or "verification_failed", "The template candidate did not prove its findings.", [step], {"input_tokens": 0, "output_tokens": 0, "provider_request_ids": []})
         return _Pass(TEMPLATE, narrowed, "ready", proposal, bundle, verification, None, None, [step], {"input_tokens": 0, "output_tokens": 0, "provider_request_ids": []})
+
+    async def _static_assertion_passes(
+        self,
+        group_request: RepairRequest,
+        snapshot: Snapshot,
+        verifier: Verifier,
+        findings: list[FindingSnapshot],
+        proof_report: dict[str, str],
+        report: dict[str, str],
+        failures: dict[str, dict[str, Any]],
+    ) -> list[_Pass]:
+        """One statically asserted candidate per finding no executed pass could prove.
+
+        Reached only after the template pass, the model pass and every focused retry have run and
+        left the finding unproven, and only for a finding where `static_assertion_reason` says why
+        execution was not available. Each finding gets its own bundle, because a static assertion
+        is a claim about one file: one finding's refusal must not sink another's.
+
+        There is no generated regression test, and that is the point rather than an omission: the
+        level exists for findings no test could cover. `verify_static_assertion` records that
+        nothing ran, and `_static_assertion_limitations` says which checks did not.
+        """
+        if not group_request.policy.allow_static_assertion_verification:
+            return []
+        if verifier.rule_oracle is None:
+            # No analysis service to re-run the rule, so this level is not available here at all.
+            # The pass is skipped rather than run and refused: a deployment without an oracle must
+            # report each finding's executed-path reason, not a refusal from a level it never had.
+            # `Verifier.verify_static_assertion` still refuses a direct call, as the backstop.
+            return []
+        passes: list[_Pass] = []
+        for finding in findings:
+            finding_id = finding.stable_id
+            family = _rule_family(finding) or ""
+            reason = static_assertion_reason(family, proof_report.get(finding_id))
+            if reason is None:
+                continue
+            template = generate_template(snapshot, finding, family, language_of_path(finding.affected_path) or "")
+            if isinstance(template, TemplateFallback):
+                report[finding_id] = f"not_attempted:{template.reason}"
+                continue
+            narrowed = group_request.model_copy(update={"findings": [finding]})
+            step = {
+                "sequence": 0,
+                "tool": "static_assertion",
+                "arguments_digest_only": {"finding_ids": [finding_id], "paths": sorted({change["path"] for change in template.changes}), "reason": reason},
+                "outcome": "ok",
+                "reason": None,
+                "result_bytes": 0,
+            }
+            try:
+                # No generated test: the bundle is the patch alone, and no load check, because
+                # clause 5 is that nothing was executed and a load check requires the patched
+                # module. Off the loop like every other bundle build, because it still shells out
+                # to the parse-only syntax check.
+                bundle = await asyncio.to_thread(
+                    functools.partial(build_patch_bundle, load_checks=False),
+                    narrowed, snapshot, template.changes, None,
+                )
+            except PatchPolicyError as exc:
+                step["outcome"], step["reason"] = "rejected", str(exc.code)[:120]
+                report[finding_id] = f"rejected:{exc.code}"
+                failures[finding_id] = {"source": STATIC_ASSERTION_SOURCE, "code": exc.code, "message": str(exc.guidance or exc.code)[:400]}
+                continue
+            with telemetry.stage_span("static_assertion", **telemetry.request_attributes(group_request)) as span:
+                verification = await verifier.verify_static_assertion(narrowed, snapshot, bundle, reason=reason)
+                telemetry.record_outcome(span, verification.status, None if verification.status == "passed" else verification.reason_code)
+            proposal = {
+                "hypothesis": f"Deterministic template repair, asserted statically ({reason}): {template.description}.",
+                "intended_behavior": "Legitimate input behaves as before; only the injected value is kept out of the sink.",
+                "assumptions": [
+                    "Nothing was executed. The rule that flagged the finding was re-run over the original "
+                    "and the patched file, and no other rule started matching.",
+                ],
+                "citations": [
+                    {"path": change["path"], "line_start": int(change["start_line"]), "line_end": int(change["start_line"]) + len(change["original_lines"]) - 1}
+                    for change in template.changes
+                ],
+            }
+            usage = {"input_tokens": 0, "output_tokens": 0, "provider_request_ids": []}
+            if verification.status != "passed" or finding_id not in verification.proven_finding_ids:
+                step["outcome"] = "not_proven"
+                step["reason"] = str(verification.reason_code or "static_assertion_failed")[:120]
+                report[finding_id] = f"not_asserted:{verification.reason_code or 'static_assertion_failed'}"
+                failures.update(_failure_entries(narrowed, bundle, verification, STATIC_ASSERTION_SOURCE))
+                passes.append(_Pass(
+                    STATIC_ASSERTION_SOURCE, narrowed,
+                    verification.status if verification.status in ("unsupported", "inconclusive") else "inconclusive",
+                    proposal, bundle, verification, verification.reason_code or "static_assertion_failed",
+                    "The patch was not asserted against the rule that produced the finding.", [step], usage,
+                ))
+                continue
+            report[finding_id] = "asserted"
+            passes.append(_Pass(STATIC_ASSERTION_SOURCE, narrowed, "ready", proposal, bundle, verification, None, None, [step], usage))
+        return passes
 
     async def _retry_agent(self, retry_request: RepairRequest, checkpoints: AgentCheckpointStore | None, finding_id: str) -> RepairAgent:
         if self.agent_factory:
@@ -710,6 +874,20 @@ class RepairEngine:
             proven |= retry_pass.proven
             failures.update(_failure_entries(retry_request, retry_pass.bundle, retry_pass.verification, RETRY_SOURCE))
 
+        # Last, and only for what every executed pass left unproven: the static assertion. It is
+        # the weakest level the product has, so nothing reaches it that execution could have
+        # proven, and a finding is only asserted when the reason execution was unavailable to it
+        # is recorded. `assertion_report` goes into the group's evidence beside the proof and
+        # template reports.
+        assertion_report: dict[str, str] = {}
+        unasserted = [finding for finding in group if finding.stable_id not in proven]
+        if unasserted:
+            for item in await self._static_assertion_passes(
+                group_request, snapshot, verifier, unasserted, proof_report, assertion_report, failures
+            ):
+                passes.append(item)
+                proven |= item.proven
+
         # One candidate per proven finding, from whichever pass proved it first, each verified
         # on its own hunks; a pass whose evidence policy refuses, or whose patch overlaps an
         # earlier candidate, contributes nothing and says so.
@@ -722,7 +900,7 @@ class RepairEngine:
             if not item.ready:
                 continue
             level = item.verification.verification_level
-            if level not in VERIFICATION_LEVELS or (level == DEVELOPMENT_VERIFICATION_LEVEL and not request.policy.allow_development_verification):
+            if not _level_permitted(level, request.policy):
                 rejected_reason = ("verification_level_not_permitted", "The verification evidence does not carry a verification level this policy accepts.")
                 continue
             if await asyncio.to_thread(bundles_conflict, snapshot, [bundle for _, bundle, _ in accepted + entries], item.bundle):
@@ -762,6 +940,8 @@ class RepairEngine:
             "templates": template_report,
             "candidate_sources": candidate_sources,
         }
+        if assertion_report:
+            evidence["static_assertions"] = assertion_report
         if retries:
             evidence["retries"] = retries
         if model_pass is not None:
@@ -903,6 +1083,23 @@ class RepairEngine:
                     for item in unproven
                 )
 
+        # A batch carries one kind of evidence. A statically asserted candidate says nothing ran;
+        # an executed one says a test failed before the change and passed after it. Shipping both
+        # under one response-level verification level would mean labelling the batch with whichever
+        # of the two the reader happened to look at, so when the job produced any executed
+        # candidate the asserted ones are dropped here and reported with the reason. Combining
+        # them properly is possible and is not implemented; `contracts/repair-v1.md` says so.
+        executed = [item for item in accepted if item[2].verification_level != STATIC_ASSERTION_VERIFICATION_LEVEL]
+        if executed and len(executed) != len(accepted):
+            for candidate, _, verification in accepted:
+                if verification.verification_level != STATIC_ASSERTION_VERIFICATION_LEVEL:
+                    continue
+                skipped.extend(
+                    {"finding_id": finding_id, "code": "static_assertion_not_combined", "message": STATIC_ASSERTION_NOT_COMBINABLE}
+                    for finding_id in candidate.finding_ids
+                )
+            accepted = executed
+
         outcomes = [dataclass_replace(outcome, language=group_languages.get(outcome.index)) for outcome in outcomes]
         group_report = [outcome.report() for outcome in outcomes]
         agent_trace = [entry for outcome in outcomes for entry in outcome.trace]
@@ -950,9 +1147,7 @@ class RepairEngine:
         except BatchPolicyError as exc:
             return _reason_response(request, "inconclusive", "combined_verification_failed", str(exc), request_digest, snapshot.manifest_digest, {"groups": group_report}, skipped=skipped)
         combined_level = combined.verification.verification_level
-        if combined_level not in VERIFICATION_LEVELS or (
-            combined_level == DEVELOPMENT_VERIFICATION_LEVEL and not request.policy.allow_development_verification
-        ):
+        if not _level_permitted(combined_level, request.policy):
             return _reason_response(
                 request,
                 "inconclusive",

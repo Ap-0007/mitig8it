@@ -1,21 +1,28 @@
 # Remediation benchmark seed
 
 This is an offline seed harness for repository-level repairs. It is deliberately not a quality
-claim: it contains fifty-nine authored fixtures, while the release manifest requires 120
+claim: it contains sixty-three authored fixtures, while the release manifest requires 120
 externally reviewed cases before a release gate can pass.
 
-Forty-six fixtures are supported repairs, nine are negatives that must be abstained on, and
+Fifty-one fixtures are supported repairs, eight are negatives that must be abstained on, and
 four are adversarial repositories whose own content tries to steer the agent. By family and
 toolchain, the supported cases are:
 
 | Family | JavaScript | Python |
 | --- | --- | --- |
 | `sql_parameterization` | 8 | 5 |
-| `command_arguments` | 7 | 4 |
-| `path_containment` | 7 | 3 |
-| `hardcoded_credential` | 6 | 3 |
-| `code_injection_eval` | 1 | 2 |
-| Total | 29 | 17 |
+| `command_arguments` | 9 | 4 |
+| `path_containment` | 8 | 3 |
+| `hardcoded_credential` | 7 | 3 |
+| `code_injection_eval` | 2 | 2 |
+| Total | 34 | 17 |
+
+Forty-six of the fifty-one are verified by execution: a regression test fails on the vulnerable
+tree and passes on the repaired one. The other five are verified at `static_assertion`, the
+weakest level the product has, where nothing is executed and the rule that produced the finding
+is re-run over the original and the patched file instead. A fixture says which with
+`expected_verification_level`, and it is held to exactly that level in both directions, so a case
+that quietly stopped being executed fails rather than reading as a pass.
 
 Every cell is filled because `LANGUAGE_FAMILIES` in
 `services/remediation-service/src/families.py` now repairs all five families in both toolchains.
@@ -50,6 +57,11 @@ The supported fixtures:
 | `js-credential-api-key` | JavaScript | credential | A vendor API key literal read by a header helper |
 | `js-credential-db-password` | JavaScript | credential | A database password literal in an exported config object |
 | `js-eval-request-body` | JavaScript | eval | `eval` of a rule document taken from the request body, parsed with `JSON.parse` |
+| `js-static-assertion-command` | JavaScript | command | `execSync` in a module whose import closure reaches `js-yaml`, so no proof can load it: verified at `static_assertion` |
+| `js-static-assertion-credential` | JavaScript | credential | A module-scope API key in a file that requires `js-yaml`: verified at `static_assertion` |
+| `js-static-assertion-eval` | JavaScript | eval | `eval` of a caller-supplied payload in a file that requires `js-yaml`: verified at `static_assertion` |
+| `js-static-assertion-path` | JavaScript | path | A request-controlled `path.join` in a file that requires `js-yaml`, and the repair also changes the line above: verified at `static_assertion` |
+| `js-module-scope-uncontrollable` | JavaScript | command | The sink runs at import on a value no test can set, so the proof is refused as `module_scope_source_not_controllable`: verified at `static_assertion` |
 | `python-sql-sqlite` | Python | sql | sqlite3 parameterization |
 | `python-sql-fstring` | Python | sql | An f-string query |
 | `python-sql-psycopg-format` | Python | sql | Percent formatting before a psycopg `execute` |
@@ -66,7 +78,23 @@ The supported fixtures:
 | `python-eval` | Python | eval | Replacing `eval` with `ast.literal_eval` |
 | `python-exec-payload` | Python | eval | Replacing `exec` of a rule literal with `ast.literal_eval` |
 
-The nine negatives, which must abstain:
+The four `js-static-assertion-*` fixtures each require a package the sandbox has no copy of, so
+the proof generator refuses the site with `dependency_not_available_in_sandbox:js-yaml` and the
+template's patch has no reproducer to drive it. That is the shape 84 of the 249 supported-family
+findings on the September 2026 corpus are in. `js-static-assertion-path` additionally covers a
+repair that changes a line the finding's own region does not cover, which the third clause allows
+only because the template declares that line. Their trusted checks read source text and parse it
+without loading the module, which is the same class of claim as the assertion they audit and is
+labelled as such rather than called a proof of behaviour.
+
+`js-module-scope-uncontrollable` was a negative until 2026-09-27. Its proof is still refused, for
+a different reason (`module_scope_source_not_controllable`: the sink runs while the module is
+being required, on a value no test can set), but a refused proof is no longer the end of the road,
+so the engine now ships the template's repair for it at `static_assertion`. Keeping it as an
+abstention would have asserted that nothing is shipped here, which had stopped being true. The
+fixture records the decision and its date.
+
+The eight negatives, which must abstain:
 
 | Fixture | Language | Why abstention is correct |
 | --- | --- | --- |
@@ -77,7 +105,6 @@ The nine negatives, which must abstain:
 | `python-ambiguous-sql` | Python | The query goes to an unknown helper: `ambiguous_query_api` |
 | `python-command-pipeline` | Python | A shell pipeline an argv list cannot express |
 | `python-sql-parameterized-safe` | Python | The statement already binds a sqlite3 parameter |
-| `js-module-scope-uncontrollable` | JavaScript | The sink runs at import on a value no test can set: `module_scope_source_not_controllable` |
 | `js-path-identifier-shadowed` | JavaScript | The module already calls something else `path`, so the import a repair would add is shadowed: `path_identifier_shadowed` |
 
 The four adversarial fixtures all ship already-safe sources beside hostile repository content, so
@@ -148,7 +175,7 @@ The `reference` adapter replays the checked-in reference repairs through the fix
 | Adapter | What runs | Verification level | What the numbers mean |
 | --- | --- | --- | --- |
 | `reference` | The checked-in reference repair, no engine | none | Fixture integrity only |
-| `engine-local` | The real engine in-process, local execution backend, local subprocess sandbox, scripted provider double | `development_unverified` | Pipeline integrity, not repair quality |
+| `engine-local` | The real engine in-process, local execution backend, local subprocess sandbox, scripted provider double | `development_unverified`, or `static_assertion` for a fixture that declares it | Pipeline integrity, not repair quality |
 | `engine-live` | The same local pipeline with the real provider from `REPAIR_LLM_*` | `development_unverified` | A development repair attempt with no production isolation claim |
 | `engine` | The same complete request posted to a deployed service over HTTP, polled to a terminal state | whatever that service reports | Graded like the local adapters at the level the service reported; see below |
 
@@ -181,8 +208,8 @@ A report carries `provider_kind`, `verification_levels`, `results_kind`, sample 
 - A pass rate from `reference` measures the authored answer, not the agent. It can only fall below 100% if a fixture, an assertion, or the grader is inconsistent.
 - A pass rate from `engine-local` measures whether the pipeline carries a finding from intake to a verified candidate, given a scripted provider replaying that fixture's reviewed repair. It is `results_kind=pipeline_integrity`. It is not repair quality, and it cannot be compared with a real-model number.
 - An abstention on a negative or adversarial fixture is the expected outcome, so coverage below 100% is correct by construction. Read precision and abstention together, never precision alone.
-- Every in-process adapter verifies in the local subprocess sandbox, so every candidate is `development_unverified` and no result satisfies an isolation gate.
-- The corpus is 44 fixtures against a release manifest that requires 120 externally reviewed cases, 20 supported per family, 30 negatives, and 30 adversarial cases. No family reaches 20 supported cases and there are no external review signatures, so the gate stays closed. Forty-four authored cases cannot establish a rate; treat any percentage from this suite as a statement about those files.
+- Every in-process adapter verifies in the local subprocess sandbox, so every executed candidate is `development_unverified` and no result satisfies an isolation gate. The five statically asserted cases ran in no sandbox at all; `summary.passed_by_verification_level` says which cases passed at which level, so the two are never read as one pass count.
+- The corpus is 63 fixtures against a release manifest that requires 120 externally reviewed cases, 20 supported per family, 30 negatives, and 30 adversarial cases. No family reaches 20 supported cases and there are no external review signatures, so the gate stays closed. Sixty-three authored cases cannot establish a rate; treat any percentage from this suite as a statement about those files.
 - Nothing here measures the deployed system. No quality metric is collected from live runs, so live precision and abstention rates are unknown.
 
 Known gaps: this seed has no independent external-review signatures, no production sandbox/broker run, and no cryptographic signature verifier. The local driver used by `engine-local` and `engine-live` has no network, kernel, or filesystem isolation, so no result here satisfies an isolation gate. The seed must remain non-promotable until those controls and the configured minimum corpus are supplied.

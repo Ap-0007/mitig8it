@@ -38,6 +38,15 @@
         "inconclusive"
       ]
     },
+    "expected_verification_level": {
+      "description": "The verification level this fixture's repair must reach, weakest first. Optional, and only on a supported fixture. A fixture that declares it is held to exactly that level, both ways: a case that stopped being executed and became a static assertion fails, and so does a case expected to be asserted that instead reports an executed proof. Omitted means the adapter's own permitted levels apply, which for a local adapter is development_unverified or static_assertion.",
+      "enum": [
+        "static_assertion",
+        "development_unverified",
+        "isolated_job",
+        "independent_sandbox"
+      ]
+    },
     "budget": {
       "type": "object",
       "required": [

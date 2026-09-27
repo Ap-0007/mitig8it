@@ -60,6 +60,14 @@ TIER2_TEMPLATE_EXTENSIONS = frozenset(
 
 TIER2_SUPPORTED_EXTENSIONS = TIER2_CODE_EXTENSIONS | TIER2_TEMPLATE_EXTENSIONS
 
+# prAnalysisOrchestrator.js: TIER2_WORKFLOW_EXTENSIONS and TIER2_WORKFLOW_DIRECTORY, and
+# WORKFLOW_EXTENSIONS / WORKFLOW_DIRECTORY in the analysis service's test_code_scope.py.
+# A workflow is in scope by path, not by extension: ordinary YAML elsewhere in a repository
+# is not a workflow, and the workflow rules are not true of it.
+TIER2_WORKFLOW_EXTENSIONS = frozenset({".yml", ".yaml"})
+
+TIER2_WORKFLOW_DIRECTORY = ".github/workflows/"
+
 # prAnalysisOrchestrator.js: const INLINE_COMMENT_CAP = 40;
 INLINE_COMMENT_CAP = 40
 
@@ -178,15 +186,31 @@ def changed_file_limitation(
     }
 
 
+def is_workflow_path(path: str) -> bool:
+    """A GitHub Actions workflow: `.yml`/`.yaml` under a `.github/workflows/` path segment.
+
+    Mirrors `isWorkflowPath` in prAnalysisOrchestrator.js and `is_workflow_path` in the
+    analysis service's test_code_scope.py.
+    """
+    normalized = str(path or "").replace("\\", "/").lower()
+    if file_extension(normalized) not in TIER2_WORKFLOW_EXTENSIONS:
+        return False
+    return normalized.startswith(TIER2_WORKFLOW_DIRECTORY) or f"/{TIER2_WORKFLOW_DIRECTORY}" in normalized
+
+
 def should_fetch_full_file_content(file_entry: Dict[str, Any]) -> bool:
     """True when the semgrep tier gets more from the whole file than from the patch alone.
 
     A taint rule needs the source and the sink, and a patch usually holds only one of them. The
     extension allowlist keeps the fetch to languages the scanner has rules for, and the minified
     suffixes keep a single-line bundle out of a scan that would find nothing useful in it.
+
+    A GitHub Actions workflow is in scope too, and it is the one entry decided by the path: the
+    workflow rules read the whole document, because what makes a step dangerous is the trigger
+    declared forty lines above it.
     """
     path = str(file_entry.get("path") or "")
-    if file_extension(path) not in TIER2_SUPPORTED_EXTENSIONS:
+    if file_extension(path) not in TIER2_SUPPORTED_EXTENSIONS and not is_workflow_path(path):
         return False
     if path.startswith(VENDOR_PATH_PREFIXES) or any(
         fragment in path for fragment in CONTENT_VENDOR_PATH_SUBSTRINGS
@@ -268,8 +292,9 @@ def scope_report(
 
     The trial's clean repositories reported "12 files in scope" on the second run: ten source
     files, the workflow YAML the pull request adds and the README the second commit touched.
-    Two of those twelve are files no security rule reads in full, and nothing said which files
-    had been dropped or why, although `action/README.md` promised the check summary would.
+    Two of those twelve were files no security rule read in full, and nothing said which files
+    had been dropped or why, although `action/README.md` promised the check summary would. The
+    workflow YAML is now one of the ten: tier 2 has rules for it, so it counts as `analysed`.
 
     So the count is split. `analysed` is the files the semgrep tier reads whole, which is the
     number "in scope" was meant to be. `excluded` is what `.mitig8it.yml` removed. `skipped` is

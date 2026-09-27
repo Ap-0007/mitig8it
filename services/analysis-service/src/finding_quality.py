@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from comment_stripper import strip_lines
+from test_code_scope import is_non_code_text_path
 
 
 def make_fingerprint(rule_id: str, path: str, line_start: int, snippet: str) -> str:
@@ -228,6 +229,75 @@ def pattern_matches_reviewable_content(
     ) is not None
 
 
+def pattern_match_lines(
+    patch: str,
+    pattern,
+    *,
+    path: Any = None,
+    exclusion=None,
+    blank_strings: bool = False,
+    content: Any = None,
+) -> List[int]:
+    """Every reviewable line of `patch` that `pattern` matches, in file order.
+
+    `find_pattern_match_entry` answers "does this rule fire here", which is all tier 1 needs
+    to emit its one finding per rule per file. A static assertion needs more than that: clause
+    1 asks whether the rule matches *the finding's line* and clause 2 asks whether it matches
+    the patched file *anywhere*, and a first-match answer cannot decide either on a file with
+    two instances of the same defect. So this walks every entry rather than stopping.
+    """
+    lines: List[int] = []
+    for entry in parse_patch_entries(patch, path, content):
+        if is_transcript_artifact_line(entry["content"]):
+            continue
+        text = entry_scan_text(entry, blank_strings=blank_strings)
+        if not pattern.search(text):
+            continue
+        if exclusion is not None and exclusion.search(text):
+            continue
+        lines.append(int(entry["line_number"]))
+    return sorted(set(lines))
+
+
+def rule_scan_options(rule, file_path: str, content: str = "") -> Dict[str, Any]:
+    """How a rule reads a patch: which file it is, what it must not see, what it may.
+
+    `content` is the file at the head revision when the request carried it. It is what lets the
+    comment stripper know that a hunk began inside a docstring, which a diff cannot show.
+    """
+    exclusion = getattr(rule, "exclusion", None)
+    prose_exclusion = getattr(rule, "non_code_text_exclusion", None)
+    if prose_exclusion is not None and is_non_code_text_path(file_path):
+        # Both conditions have to hold, and `find_pattern_match_entry` takes one pattern, so
+        # they are combined into a single alternation rather than threaded through as a list.
+        exclusion = (
+            re.compile(f"(?:{exclusion.pattern})|(?:{prose_exclusion.pattern})")
+            if exclusion is not None
+            else prose_exclusion
+        )
+    return {
+        "path": file_path,
+        "exclusion": exclusion,
+        "blank_strings": not getattr(rule, "reads_string_literals", True),
+        "content": content,
+    }
+
+
+def whole_file_patch(content: str) -> str:
+    """A file's full text as an all-context unified diff, so a rule can be run over it.
+
+    Every tier 1 entry point reads a patch, because detection only ever looks at changed
+    lines. A static assertion has to read whole files instead: clause 2 is a claim about the
+    patched file anywhere, not about its diff. Rather than teach the matchers a second input
+    shape, the file is presented as a diff in which every line is context, with a hunk header
+    so the reported line numbers are the file's own. Each line is prefixed with one space, so
+    a body line that itself starts with `-` or `+` is read as text and not as a diff marker.
+    """
+    lines = str(content or "").split("\n")
+    header = f"@@ -1,{len(lines)} +1,{len(lines)} @@"
+    return "\n".join([header, *(" " + line for line in lines)])
+
+
 # The containment repair the taint rule accepts (see the `cwe-22.path-traversal-fs` sanitizer in
 # opengrep_rules/javascript.yml): resolve the candidate path against the base directory, then
 # reject it unless the resolved path stays under that base. `path.basename` is not one of these:
@@ -409,6 +479,138 @@ def _same_cluster(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
     return True
 
 
+# One weakness described twice, where the two descriptions are not the same kind of thing.
+#
+# `_same_cluster` merges findings that share an `internal_type`, which is the symmetric case: two
+# detectors saw the same flaw and either name is the right name for it. This table is the
+# asymmetric one. The key subsumes the values: a finding of a subsumed type at the same site
+# exists *because* of the subsuming finding, and the subsuming finding's fix removes it. Reporting
+# both asks a reviewer to make one change twice.
+#
+# It is directional on purpose, and the direction is not a preference between two equals. Under
+# `pull_request_target`, `persist-credentials: true` leaves the base repository's token in
+# `.git/config` only because the step checked out a contributor's revision; stop doing that and
+# there is nothing left to fix. The reverse does not hold, so an ordinary `pull_request` workflow
+# that leaves `persist-credentials` on is still reported on its own.
+#
+# This lives here rather than in the rule patterns because it is a question about two findings,
+# and a rule can only see one. A `pattern-not` in `workflow_coverage.yml` would have had to
+# re-express the other rule's whole pattern inside this one, and the two would then drift apart
+# silently the first time either was narrowed.
+SUBSUMED_INTERNAL_TYPES: Dict[str, frozenset] = {
+    "untrusted_code_checkout": frozenset({"workflow_credential_persistence"}),
+}
+
+# How far apart two findings may be and still be the same site, in lines.
+#
+# Both workflow rules already require their keys to be within six lines of each other, because
+# what makes the pair a pair is that they are one `actions/checkout` step. Eight lines is that
+# distance plus the two the rules can each be anchored off by, and it is a proxy for "the same
+# step" rather than a parse: the clusterer has the findings, not the document.
+SUBSUMPTION_LINE_WINDOW = 8
+
+
+def _record_supporting_detections(
+    survivor: Dict[str, Any],
+    supporting: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """A copy of `survivor` carrying the rule ids and taxonomy of the findings that did not survive.
+
+    Shared by the symmetric merge in `cluster_findings` and the directional fold in
+    `_apply_subsumption`, so a finding that was folded is as traceable as one that was clustered:
+    `merged_rule_ids` names every rule that matched, in the survivor's own evidence and in the
+    extras map that crosses the gRPC contract intact.
+    """
+    supporting_rules = _merge_unique(
+        [
+            finding.get("rule_id")
+            for finding in supporting
+            if finding.get("rule_id") != survivor.get("rule_id")
+        ]
+    )
+    supporting_detectors = _merge_unique(
+        [
+            detector_kind(finding)
+            for finding in supporting
+            if detector_kind(finding) != detector_kind(survivor)
+        ]
+    )
+
+    merged = dict(survivor)
+    # The union of the rule ids that detected this flaw, the survivor's first. Downstream
+    # mapping by rule id (the remediation service's repair families) then still resolves the
+    # finding whichever rule id survived. It also travels in the evidence extras, the one map on
+    # the finding that crosses the gRPC contract intact.
+    merged_rule_ids = _merge_unique(
+        [*(survivor.get("merged_rule_ids") or [survivor.get("rule_id")]), *supporting_rules]
+    )
+    merged["merged_rule_ids"] = merged_rule_ids
+    details = dict(merged.get("evidence_details") or {})
+    extra = dict(details.get("extra") or {})
+    extra["merged_rule_ids"] = merged_rule_ids
+    details["extra"] = extra
+    merged["evidence_details"] = details
+
+    evidence_lines = [str(survivor.get("evidence") or survivor.get("description") or "").strip()]
+    if supporting_rules:
+        evidence_lines.append(f"Supporting detections: {', '.join(supporting_rules)}.")
+    if supporting_detectors:
+        evidence_lines.append(f"Corroborated by: {', '.join(supporting_detectors)}.")
+    merged["evidence"] = " ".join(part for part in evidence_lines if part)
+    return merged
+
+
+def _subsumes(survivor: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+    """True when `candidate` is a consequence of `survivor` at the same site."""
+    subsumed = SUBSUMED_INTERNAL_TYPES.get(str(survivor.get("internal_type") or ""))
+    if not subsumed or str(candidate.get("internal_type") or "") not in subsumed:
+        return False
+    if survivor.get("file_path") != candidate.get("file_path"):
+        return False
+    survivor_line = int(survivor.get("line_start") or 0)
+    candidate_line = int(candidate.get("line_start") or 0)
+    if not survivor_line or not candidate_line:
+        return False
+    return abs(survivor_line - candidate_line) <= SUBSUMPTION_LINE_WINDOW
+
+
+def _apply_subsumption(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop every finding another finding at the same site already accounts for.
+
+    The survivor is pinned by the table, never chosen by severity or confidence, because the
+    point is which fix a reviewer should make and that is not a question about scores.
+
+    Confidence is deliberately left alone. The symmetric merge raises it, because two detectors
+    agreeing is evidence; a consequence agreeing with its cause is not, so folding one in says
+    nothing new about whether the survivor is real.
+    """
+    if not any(str(finding.get("internal_type") or "") in SUBSUMED_INTERNAL_TYPES for finding in findings):
+        # Nothing here subsumes anything, which is the overwhelmingly common case.
+        return findings
+
+    folded: Dict[int, List[Dict[str, Any]]] = {}
+    absorbed: set = set()
+    for index, candidate in enumerate(findings):
+        for survivor_index, survivor in enumerate(findings):
+            if survivor_index == index or survivor_index in absorbed:
+                continue
+            if _subsumes(survivor, candidate):
+                folded.setdefault(survivor_index, []).append(candidate)
+                absorbed.add(index)
+                break
+
+    if not absorbed:
+        return findings
+
+    result: List[Dict[str, Any]] = []
+    for index, finding in enumerate(findings):
+        if index in absorbed:
+            continue
+        supporting = folded.get(index)
+        result.append(_record_supporting_detections(finding, supporting) if supporting else finding)
+    return result
+
+
 def _choose_primary(current: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
     current_kind = detector_kind(current)
     candidate_kind = detector_kind(candidate)
@@ -484,21 +686,7 @@ def cluster_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             clustered.append(primary)
             continue
 
-        supporting_rules = _merge_unique([finding.get("rule_id") for finding in cluster if finding.get("rule_id") != primary.get("rule_id")])
-        supporting_detectors = _merge_unique([detector_kind(finding) for finding in cluster if detector_kind(finding) != detector_kind(primary)])
-
-        merged = dict(primary)
-        # The union of the rule ids that detected this flaw, the survivor's first. Downstream
-        # mapping by rule id (the remediation service's repair families) then still resolves
-        # the finding whichever tier's rule id survived the merge. It also travels in the
-        # evidence extras, the one map on the finding that crosses the gRPC contract intact.
-        merged_rule_ids = _merge_unique([primary.get("rule_id"), *supporting_rules])
-        merged["merged_rule_ids"] = merged_rule_ids
-        details = dict(merged.get("evidence_details") or {})
-        extra = dict(details.get("extra") or {})
-        extra["merged_rule_ids"] = merged_rule_ids
-        details["extra"] = extra
-        merged["evidence_details"] = details
+        merged = _record_supporting_detections(primary, cluster)
         anchor = _choose_review_anchor(cluster, primary)
         merged["confidence"] = min(
             0.99,
@@ -514,13 +702,12 @@ def cluster_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if merged["taxonomy_mappings"].get("owasp"):
             merged["owasp_category"] = merged["taxonomy_mappings"]["owasp"][0]
 
-        evidence_lines = [str(primary.get("evidence") or primary.get("description") or "").strip()]
-        if supporting_rules:
-            evidence_lines.append(f"Supporting detections: {', '.join(supporting_rules)}.")
-        if supporting_detectors:
-            evidence_lines.append(f"Corroborated by: {', '.join(supporting_detectors)}.")
-        merged["evidence"] = " ".join(part for part in evidence_lines if part)
         clustered.append(merged)
+
+    # Clustering answers "are these the same flaw". Subsumption answers the different question of
+    # whether one of them only exists because of another, and it runs afterwards so that what it
+    # folds is a cluster survivor rather than one member of a cluster.
+    clustered = _apply_subsumption(clustered)
 
     clustered.sort(
         key=lambda finding: (

@@ -48,17 +48,18 @@ The combined production path is `POST /analyze/pr`. Tier-specific endpoints exis
 
 ### Supported families by language
 
-The repair service classifies a finding into one of five families from its CWE and rule text. Language follows the affected file's extension: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` are JavaScript, `.py` is Python. A group that mixes both is split by language.
+The repair service classifies a finding into one of six families from its CWE and rule text. Language follows the affected file's extension: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs` are JavaScript, `.py` is Python, and a `.yml` or `.yaml` file under `.github/workflows/` is a workflow. A `.yml` file anywhere else is ordinary YAML and is not a repair target. A group that mixes languages is split by language.
 
-| Family | JavaScript | Python |
-| --- | --- | --- |
-| `sql_parameterization` | yes | yes |
-| `command_arguments` | yes | yes |
-| `path_containment` | yes | yes |
-| `hardcoded_credential` | yes | yes |
-| `code_injection_eval` | yes | yes |
+| Family | JavaScript | Python | Workflow | Shown to be a repair by |
+| --- | --- | --- | --- | --- |
+| `sql_parameterization` | yes | yes | no | execution |
+| `command_arguments` | yes | yes | no | execution |
+| `path_containment` | yes | yes | no | execution |
+| `hardcoded_credential` | yes | yes | no | execution |
+| `code_injection_eval` | yes | yes | no | execution |
+| `workflow_hardening` | no | no | yes | static assertion |
 
-All five are supported for both languages. The last two were Python-only until the Node harness learned to record environment reads and to record every way a string becomes code without running it.
+The first five are supported for both languages, and two of them were Python-only until the Node harness learned to record environment reads and to record every way a string becomes code without running it. The sixth repairs a GitHub Actions workflow, which no test can demonstrate is secure, so it is shown by static assertion instead: the rule that flagged the line no longer matches the patched file, nothing else in the file changed, no rule that was not already matching starts matching, and nothing ran.
 
 For every supported finding the service first writes both halves of the repair itself, before any model call. `src/sites.py` derives the enclosing Express route or Python function or Flask view over the exact snapshot, falling back to the enclosing function or method and then to module scope, where the sink runs at import and a proof drives it by setting what the module reads before loading it; `src/proofs.py` emits one harness regression test from that site, and `src/templates.py` attempts a deterministic hunk for the family. TypeScript is loaded by Node's own type stripper, so a `.ts` module needs no toolchain in the sandbox. A proof is written only for a module the sandbox can actually load: the closure of what an import pulls in has to be Node built-ins, the harness fakes, and repository files, and a package the sandbox has no copy of refuses the finding rather than producing a test that would fail on the original and the repaired tree alike. Template hunks are verified exactly like a model proposal and are charged zero input and output tokens. Only findings the template pass did not prove reach the model, which receives the same service-written proof.
 
@@ -70,7 +71,7 @@ Per-finding skips are reported in the job's `skipped` list and surface as the `N
 
 | Reason code | Meaning |
 | --- | --- |
-| `unsupported_rule_family` | The finding is outside the five families, or the family is not repaired for that language yet. |
+| `unsupported_rule_family` | The finding is outside the six families, or the family is not repaired for that language yet. |
 | `rule_family_disabled` | The family is not in `REMEDIATION_ALLOWED_RULE_FAMILIES_JSON`. |
 | `affected_source_missing` | The affected file is absent from the snapshot. The snapshot drops that one path and reports it rather than refusing, so the findings whose sources it does carry are still repaired. |
 | `protected_path` | Policy will not change that file, so no repair of it could be applied: a test directory, a lock file, a CI or infrastructure path. Asked before either half is generated. |

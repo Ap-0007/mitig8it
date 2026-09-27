@@ -1,4 +1,3 @@
-import hashlib
 import hmac
 import os
 import re
@@ -19,6 +18,9 @@ from finding_quality import (
     has_path_containment_guard,
     make_fingerprint,
     pattern_matches_reviewable_content,
+    # Defined beside the matchers it configures, and re-exported here because both tiers and
+    # the static assertion endpoint below read a rule through it.
+    rule_scan_options,
 )
 from security_rules import (
     DEPENDENCY_RISK_PATTERNS,
@@ -26,12 +28,13 @@ from security_rules import (
     SECURITY_RULES,
     likely_llm_repo,
 )
-from opengrep_runner import quarantined_rule_ids, run_opengrep, run_opengrep_with_limitations
+from opengrep_runner import ScanPathError, quarantined_rule_ids, run_opengrep, run_opengrep_with_limitations
 from secret_detection import (
     POSTING as SECRET_DETECTOR_POSTING,
     POSTING_QUARANTINE as SECRET_POSTING_QUARANTINE,
     secret_findings,
 )
+import static_assertion
 from llm_client import redact
 from llm_triage import triage_findings
 from remediation_patches import build_remediation_patch
@@ -62,6 +65,15 @@ class AnalyzePRRequest(BaseModel):
     pull_request_number: int
     commit_sha: str
     files: List[ChangedFile] = Field(default_factory=list)
+
+
+class StaticAssertionRequest(BaseModel):
+    """One rule, one path, two versions of one file. See `/verify/static-assertion`."""
+
+    rule_id: str = Field(min_length=1, max_length=200)
+    path: str = Field(min_length=1, max_length=512)
+    original_content: str = ""
+    patched_content: str = ""
 
 
 class TriageRequest(BaseModel):
@@ -236,30 +248,6 @@ def _deterministic_fix_metadata(rule, finding: Dict[str, Any], context: Dict[str
         "fix_target_expr": context.get("matched_text") or "",
         "missing_control_type": _deterministic_missing_control_type(rule, finding),
         "auto_fix_eligible": True,
-    }
-
-
-def rule_scan_options(rule, file_path: str, content: str = "") -> Dict[str, Any]:
-    """How a rule reads a patch: which file it is, what it must not see, what it may.
-
-    `content` is the file at the head revision when the request carried it. It is what lets the
-    comment stripper know that a hunk began inside a docstring, which a diff cannot show.
-    """
-    exclusion = getattr(rule, "exclusion", None)
-    prose_exclusion = getattr(rule, "non_code_text_exclusion", None)
-    if prose_exclusion is not None and is_non_code_text_path(file_path):
-        # Both conditions have to hold, and `find_pattern_match_entry` takes one pattern, so
-        # they are combined into a single alternation rather than threaded through as a list.
-        exclusion = (
-            re.compile(f"(?:{exclusion.pattern})|(?:{prose_exclusion.pattern})")
-            if exclusion is not None
-            else prose_exclusion
-        )
-    return {
-        "path": file_path,
-        "exclusion": exclusion,
-        "blank_strings": not getattr(rule, "reads_string_literals", True),
-        "content": content,
     }
 
 
@@ -739,6 +727,35 @@ def analyze_pr_tier3(payload: TriageRequest, request: Request):
     """Tier 3: LLM triage of existing findings. Filters false positives."""
     require_internal_auth(request)
     return triage_findings_payload(payload)
+
+
+@app.post("/verify/static-assertion")
+def verify_static_assertion(payload: StaticAssertionRequest, request: Request):
+    """Run one rule over an original and a patched file and return the four match sets.
+
+    This is the scanner half of a static assertion. It reaches no verdict: it reports where the
+    finding's own rule matches each file and where every rule matches each file, and the
+    remediation service, which knows the finding's line and the patch's changed lines, decides
+    the five clauses from that. See `static_assertion.match_sets`.
+
+    Nothing here executes the subject, and the response says so in the words the evidence
+    carries. A plain function rather than `async def` for the same reason the analysis handlers
+    are: it runs a scanner subprocess and must not sit on the event loop.
+    """
+    require_internal_auth(request)
+    for name, text in (("original_content", payload.original_content), ("patched_content", payload.patched_content)):
+        if len(text.encode("utf-8")) > static_assertion.MAX_ASSERTION_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"{name} exceeds the static assertion file size limit")
+    try:
+        return static_assertion.match_sets(
+            payload.rule_id, payload.path, payload.original_content, payload.patched_content
+        )
+    except ScanPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        # The scanner did not run. A static assertion whose rule could not be run must fail the
+        # candidate, so this is an error and never an empty match set.
+        raise HTTPException(status_code=503, detail=f"the rule could not be run: {exc}")
 
 
 @app.get("/")

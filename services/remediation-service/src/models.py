@@ -125,8 +125,19 @@ class RepairPolicy(StrictModel):
     output_usd_per_million_tokens: float = Field(default=0, ge=0, le=1000)
     request_timeout_seconds: int = Field(default=900, ge=10, le=1800)
     supported_platform: Literal["linux"] = "linux"
+    # `workflow_hardening` is accepted here and is in the default list, because a caller that
+    # cannot name it cannot turn it off either. What keeps it from publishing anything today is
+    # not the policy but `gates.static_gate`: the family verifies by static assertion, that level
+    # does not exist yet, and every candidate is refused by name until it does.
     allowed_rule_families: list[
-        Literal["sql_parameterization", "command_arguments", "path_containment", "hardcoded_credential", "code_injection_eval"]
+        Literal[
+            "sql_parameterization",
+            "command_arguments",
+            "path_containment",
+            "hardcoded_credential",
+            "code_injection_eval",
+            "workflow_hardening",
+        ]
     ] = Field(
         default_factory=lambda: [
             "sql_parameterization",
@@ -134,6 +145,7 @@ class RepairPolicy(StrictModel):
             "path_containment",
             "hardcoded_credential",
             "code_injection_eval",
+            "workflow_hardening",
         ]
     )
     sandbox_image_digest: str | None = None
@@ -143,6 +155,14 @@ class RepairPolicy(StrictModel):
     # it is real verification rather than a development convenience. An operator who wants
     # nothing below the Kubernetes/gVisor level sets this false.
     allow_isolated_job_verification: bool = True
+    # The static assertion level: the rule that flagged the line is re-run over the original and
+    # the patched file, nothing is executed, and the candidate is accepted only when all five
+    # clauses in `contracts/repair-v1.md` hold. Default true, because it is never an upgrade: a
+    # finding whose family can be proven by execution always takes the execution path, and this
+    # level is reached only by a family that declares it or by a finding whose execution was
+    # refused for a reason the evidence records. An operator who will show a reviewer nothing
+    # that was not executed sets this false.
+    allow_static_assertion_verification: bool = True
     # Plan section 8 step 4: the agent must ship a reproducer that distinguishes a real repair
     # from disabling the feature. With this set, an empty `verification_checks` is allowed,
     # because the generated regression test supplies the exploit check.

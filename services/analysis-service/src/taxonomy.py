@@ -53,6 +53,21 @@ DECLARED_INTERNAL_TYPES = frozenset({
     "security_header_disabled",
     "debug_mode_enabled",
     "error_detail_exposure",
+    # Continuous integration. These describe the repository's own automation rather than the
+    # application it builds, and they are deliberately eight separate types rather than one
+    # "workflow_misconfiguration": a maintainer acts on each of them differently. Pinning an
+    # action is a one-line mechanical edit; moving a build out of `pull_request_target` is a
+    # redesign of the workflow; a self-hosted runner reachable from a fork is an
+    # infrastructure decision. Collapsing them would put all three in one comment thread and
+    # let the cheap one hide the expensive one.
+    "untrusted_code_checkout",
+    "untrusted_build_execution",
+    "workflow_script_injection",
+    "unpinned_action_reference",
+    "excessive_workflow_permissions",
+    "workflow_credential_persistence",
+    "workflow_secret_exposure",
+    "self_hosted_runner_exposure",
 })
 
 
@@ -165,6 +180,20 @@ CWE_INTERNAL_TYPE_MAP: Dict[str, str] = {
     "CWE-613": "jwt_expiration_ignored",
     "CWE-1275": "insecure_cookie_flags",
     "CWE-1321": "prototype_pollution",
+    # The workflow tampering rules. Each of these rules declares its own `internal_type`, so
+    # this map is only the fallback for a finding that carries the CWE and no declared type.
+    # Two of the CWEs are shared by two rules with different types -- CWE-829 by the untrusted
+    # checkout and the untrusted build, CWE-732 by `write-all` and by a write scope under a
+    # privileged trigger -- and the entry names the one a bare CWE most likely means.
+    "CWE-829": "untrusted_code_checkout",
+    "CWE-1357": "unpinned_action_reference",
+    "CWE-732": "excessive_workflow_permissions",
+    "CWE-522": "workflow_credential_persistence",
+    "CWE-668": "self_hosted_runner_exposure",
+    # CWE-200 is last of the workflow entries on purpose: it is the most general "information
+    # exposure" code in the catalogue, so a finding that carries it together with a more
+    # specific CWE should resolve to the specific one, and insertion order decides that.
+    "CWE-200": "workflow_secret_exposure",
 }
 
 
@@ -235,6 +264,17 @@ CWE_ATTACK_MAP: Dict[str, List[str]] = {
     "CWE-1275": ["T1539"],
     "CWE-1321": ["T1190"],
     "CWE-1336": ["T1190"],
+    # Workflow tampering. T1195.002 is "Supply Chain Compromise: Compromise Software Supply
+    # Chain", which is what an untrusted checkout, an untrusted build and a moveable action
+    # reference all lead to. T1098 is "Account Manipulation": a workflow token with a write
+    # scope is what an attacker escalates with. T1552.001 is "Unsecured Credentials:
+    # Credentials In Files", which is exactly what `persist-credentials` leaves behind.
+    "CWE-829": ["T1195.002"],
+    "CWE-1357": ["T1195.002"],
+    "CWE-732": ["T1098"],
+    "CWE-522": ["T1552.001"],
+    "CWE-668": ["T1195.002"],
+    "CWE-200": ["T1552"],
 }
 
 
@@ -265,6 +305,16 @@ CWE_CAPEC_MAP: Dict[str, List[str]] = {
     "CWE-943": ["CAPEC-676"],
     "CWE-1321": ["CAPEC-77"],
     "CWE-1336": ["CAPEC-242"],
+    # Workflow tampering. CAPEC-184 is "Software Integrity Attack", the pattern behind both
+    # running a stranger's revision in a privileged job and following a moveable action
+    # reference. CAPEC-122 is "Privilege Abuse". CAPEC-37 is "Retrieve Embedded Sensitive
+    # Data", which is what a leaked token in `.git/config` or an exported secret becomes.
+    "CWE-829": ["CAPEC-184"],
+    "CWE-1357": ["CAPEC-184"],
+    "CWE-732": ["CAPEC-122"],
+    "CWE-522": ["CAPEC-37"],
+    "CWE-668": ["CAPEC-122"],
+    "CWE-200": ["CAPEC-37"],
 }
 
 

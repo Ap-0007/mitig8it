@@ -12,8 +12,15 @@ const DEFAULT_POLICY = Object.freeze({
   // The families the repair service can repair and prove: the three JavaScript families plus
   // the two Python-only ones (hardcoded credentials moved to the environment, eval replaced
   // by ast.literal_eval). REMEDIATION_ALLOWED_RULE_FAMILIES_JSON narrows or overrides this.
+  //
+  // `workflow_hardening` is listed so an operator can turn it off, not because it can ship: it
+  // is the one family that verifies by static assertion rather than by a regression test, that
+  // verification level is not implemented yet, and the repair service refuses every candidate of
+  // the family by name until it is. Leaving the family out here would have hidden the refusal
+  // behind a policy message that says something else.
   allowed_rule_families: Object.freeze([
     'sql_parameterization', 'command_arguments', 'path_containment', 'hardcoded_credential', 'code_injection_eval',
+    'workflow_hardening',
   ]),
   repair_memory_expiry_days: 90,
   // The sandbox deadline for one verification, enforced by the broker across every
@@ -122,6 +129,10 @@ function capabilityReport() {
   const report = Object.fromEntries(Object.keys(enabled).map((name) => [name, { enabled: enabled[name], reason: reasons[name] }]));
   report.development_verification_allowed = allowDevelopmentVerification();
   report.isolated_job_verification_allowed = allowIsolatedJobVerification();
+  report.static_assertion_verification_allowed = allowStaticAssertionVerification();
+  // Weakest first, so a consumer ranking or explaining levels reads the order from the report
+  // rather than hard-coding one of its own.
+  report.verification_levels = [...VERIFICATION_LEVEL_ORDER];
   return report;
 }
 
@@ -161,6 +172,25 @@ const PRODUCTION_VERIFICATION_LEVEL = 'independent_sandbox';
 // filesystem and a gVisor runtime class, and not comparable to the development level, where
 // repository code runs in the service's own container.
 const ISOLATED_JOB_VERIFICATION_LEVEL = 'isolated_job';
+// The weakest executed level: repository code ran as ordinary subprocesses in the service's own
+// container, with no network, kernel or filesystem isolation.
+const DEVELOPMENT_VERIFICATION_LEVEL = 'development_unverified';
+// Weaker than all three, and weaker in kind rather than in degree. The levels above differ in
+// how well isolated the thing that executed the repair was; at this one nothing executed. The
+// rule that flagged the finding was re-run over the original and the patched file, the patch was
+// held to the finding's own lines, and no rule started matching that was not matching already.
+// `services/remediation-service/contracts/repair-v1.md` states its five clauses.
+const STATIC_ASSERTION_VERIFICATION_LEVEL = 'static_assertion';
+
+// Weakest first, mirroring VERIFICATION_LEVEL_ORDER in the repair service's verifier. Any
+// comparison of two levels goes through this order rather than through string comparison, so
+// adding a level never silently reorders anything.
+const VERIFICATION_LEVEL_ORDER = [
+  STATIC_ASSERTION_VERIFICATION_LEVEL,
+  DEVELOPMENT_VERIFICATION_LEVEL,
+  ISOLATED_JOB_VERIFICATION_LEVEL,
+  PRODUCTION_VERIFICATION_LEVEL,
+];
 
 // Development verification (local subprocess sandbox) never satisfies the production
 // gate. It is accepted for apply only when an operator opts in explicitly.
@@ -168,10 +198,17 @@ function allowDevelopmentVerification() { return flagEnv('REMEDIATION_ALLOW_DEVE
 // Default true, and the repair service defaults its policy field the same way; the two must
 // agree. An operator who will accept nothing below the gVisor sandbox sets this to 'false'.
 function allowIsolatedJobVerification() { return process.env.REMEDIATION_ALLOW_ISOLATED_JOB_VERIFICATION !== 'false'; }
+// Default true, opt-out, and the repair service defaults its policy field the same way. It is
+// on by default because it is never an upgrade: a finding whose repair can be executed is
+// executed, and this level is reached only by a family that declares it or by a finding whose
+// execution was refused for a reason the evidence records. An operator who will show a reviewer
+// nothing that was not executed sets this to 'false'.
+function allowStaticAssertionVerification() { return process.env.REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION !== 'false'; }
 function verificationLevelPermitted(level) {
   if (level === PRODUCTION_VERIFICATION_LEVEL) return true;
   if (level === ISOLATED_JOB_VERIFICATION_LEVEL) return allowIsolatedJobVerification();
-  return level === 'development_unverified' && allowDevelopmentVerification();
+  if (level === STATIC_ASSERTION_VERIFICATION_LEVEL) return allowStaticAssertionVerification();
+  return level === DEVELOPMENT_VERIFICATION_LEVEL && allowDevelopmentVerification();
 }
 
 function repairMemoryExpiryDays() {
@@ -197,6 +234,8 @@ module.exports = {
   assertGenerationEnabled: assertGenerateEnabled,
   stageEstimate, branchAllowed, repairMemoryExpiryDays,
   PRODUCTION_VERIFICATION_LEVEL, ISOLATED_JOB_VERIFICATION_LEVEL,
-  allowDevelopmentVerification, allowIsolatedJobVerification, verificationLevelPermitted,
+  DEVELOPMENT_VERIFICATION_LEVEL, STATIC_ASSERTION_VERIFICATION_LEVEL, VERIFICATION_LEVEL_ORDER,
+  allowDevelopmentVerification, allowIsolatedJobVerification, allowStaticAssertionVerification,
+  verificationLevelPermitted,
   requireGeneratedRegressionTest,
 };
