@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -34,6 +35,31 @@ from test_code_scope import (
 from workflow_action_digest import action_reference_evidence
 
 RULES_DIR = Path(__file__).parent / "opengrep_rules"
+
+# The scanner binary this runner shells out to, named once so the code that asks whether it is
+# installed and the code that runs it can never disagree about what "installed" means.
+SCANNER_EXECUTABLE = "semgrep"
+
+
+class ScannerUnavailableError(RuntimeError):
+    """The scanner is not installed here, so no rule was evaluated.
+
+    Its own class rather than a bare `RuntimeError` because one caller has to be able to tell
+    "the rule ran and matched nothing" from "the rule never ran": a static assertion claims that
+    a rule no longer matches a file, and that claim is unfounded when nothing evaluated the rule
+    (`static_assertion.match_sets`). Still a `RuntimeError`, so every caller that already refuses
+    on a scanner failure keeps refusing without being changed.
+    """
+
+
+def scanner_available() -> bool:
+    """Whether this process can run the scanner at all.
+
+    Asked before an oracle built on this module is offered to a caller, so a process with the
+    rules and without the scanner reports that it cannot answer instead of answering emptily.
+    """
+    return shutil.which(SCANNER_EXECUTABLE) is not None
+
 
 # Posting policy, the tier 2 half. A rule declares `posting: quarantine` in its own
 # metadata, next to the pattern whose precision was measured, so the evidence and the
@@ -821,7 +847,7 @@ def _run_semgrep(target_dir: str, config: Optional[str] = None) -> Dict[str, Any
     try:
         result = subprocess.run(
             [
-                "semgrep",
+                SCANNER_EXECUTABLE,
                 "--config", config or str(RULES_DIR),
                 "--json",
                 "--no-git-ignore",
@@ -839,7 +865,9 @@ def _run_semgrep(target_dir: str, config: Optional[str] = None) -> Dict[str, Any
     except subprocess.TimeoutExpired:
         raise RuntimeError("OpenGrep timed out after 120s")
     except FileNotFoundError:
-        raise RuntimeError("OpenGrep executable is unavailable")
+        # Its own error class: a caller deciding a static assertion has to be able to tell this
+        # from a scan that ran and found nothing.
+        raise ScannerUnavailableError(f"{SCANNER_EXECUTABLE} is not installed, so no rule was evaluated")
 
     if result.returncode not in (0, 1):
         # returncode 1 = findings found, 0 = no findings
