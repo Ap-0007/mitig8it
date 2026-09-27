@@ -777,8 +777,17 @@ def _classify_scanner_errors(
     return limitations
 
 
-def _run_semgrep(target_dir: str) -> Dict[str, Any]:
+def _run_semgrep(target_dir: str, config: Optional[str] = None) -> Dict[str, Any]:
     """Run one scanner process over one batch directory and return its output.
+
+    `config` is the rule set to run, defaulting to every rule this service carries. A static
+    assertion passes a one-rule config written beside the scan directory, so clause 1 and
+    clause 2 are decided by exactly the rule that produced the finding and by nothing else.
+
+    `--metrics=off` and `--disable-version-check` are the two things that would otherwise let
+    this process open a socket. The rules are local files, so the scanner had no reason to reach
+    a registry either way; saying so explicitly is what lets the static assertion claim it never
+    touched the network, and it costs the detection path nothing.
 
     Tolerable per-file scanner errors are attached to the returned output under
     `analysis_limitations`; fatal ones raise.
@@ -787,10 +796,12 @@ def _run_semgrep(target_dir: str) -> Dict[str, Any]:
         result = subprocess.run(
             [
                 "semgrep",
-                "--config", str(RULES_DIR),
+                "--config", config or str(RULES_DIR),
                 "--json",
                 "--no-git-ignore",
                 "--quiet",
+                "--metrics=off",
+                "--disable-version-check",
                 "--timeout", "30",
                 "--max-target-bytes", "500000",
                 target_dir,

@@ -2,6 +2,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from comment_stripper import strip_lines
+from test_code_scope import is_non_code_text_path
 
 
 HUNK_RE = re.compile(r"@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@")
@@ -211,6 +212,75 @@ def pattern_matches_reviewable_content(
         patch, pattern, path=path, exclusion=exclusion,
         blank_strings=blank_strings, content=content,
     ) is not None
+
+
+def pattern_match_lines(
+    patch: str,
+    pattern,
+    *,
+    path: Any = None,
+    exclusion=None,
+    blank_strings: bool = False,
+    content: Any = None,
+) -> List[int]:
+    """Every reviewable line of `patch` that `pattern` matches, in file order.
+
+    `find_pattern_match_entry` answers "does this rule fire here", which is all tier 1 needs
+    to emit its one finding per rule per file. A static assertion needs more than that: clause
+    1 asks whether the rule matches *the finding's line* and clause 2 asks whether it matches
+    the patched file *anywhere*, and a first-match answer cannot decide either on a file with
+    two instances of the same defect. So this walks every entry rather than stopping.
+    """
+    lines: List[int] = []
+    for entry in parse_patch_entries(patch, path, content):
+        if is_transcript_artifact_line(entry["content"]):
+            continue
+        text = entry_scan_text(entry, blank_strings=blank_strings)
+        if not pattern.search(text):
+            continue
+        if exclusion is not None and exclusion.search(text):
+            continue
+        lines.append(int(entry["line_number"]))
+    return sorted(set(lines))
+
+
+def rule_scan_options(rule, file_path: str, content: str = "") -> Dict[str, Any]:
+    """How a rule reads a patch: which file it is, what it must not see, what it may.
+
+    `content` is the file at the head revision when the request carried it. It is what lets the
+    comment stripper know that a hunk began inside a docstring, which a diff cannot show.
+    """
+    exclusion = getattr(rule, "exclusion", None)
+    prose_exclusion = getattr(rule, "non_code_text_exclusion", None)
+    if prose_exclusion is not None and is_non_code_text_path(file_path):
+        # Both conditions have to hold, and `find_pattern_match_entry` takes one pattern, so
+        # they are combined into a single alternation rather than threaded through as a list.
+        exclusion = (
+            re.compile(f"(?:{exclusion.pattern})|(?:{prose_exclusion.pattern})")
+            if exclusion is not None
+            else prose_exclusion
+        )
+    return {
+        "path": file_path,
+        "exclusion": exclusion,
+        "blank_strings": not getattr(rule, "reads_string_literals", True),
+        "content": content,
+    }
+
+
+def whole_file_patch(content: str) -> str:
+    """A file's full text as an all-context unified diff, so a rule can be run over it.
+
+    Every tier 1 entry point reads a patch, because detection only ever looks at changed
+    lines. A static assertion has to read whole files instead: clause 2 is a claim about the
+    patched file anywhere, not about its diff. Rather than teach the matchers a second input
+    shape, the file is presented as a diff in which every line is context, with a hunk header
+    so the reported line numbers are the file's own. Each line is prefixed with one space, so
+    a body line that itself starts with `-` or `+` is read as text and not as a diff marker.
+    """
+    lines = str(content or "").split("\n")
+    header = f"@@ -1,{len(lines)} +1,{len(lines)} @@"
+    return "\n".join([header, *(" " + line for line in lines)])
 
 
 # The containment repair the taint rule accepts (see the `cwe-22.path-traversal-fs` sanitizer in
