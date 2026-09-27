@@ -38,6 +38,12 @@ TIER2_TEMPLATE_EXTENSIONS = {
 
 TIER2_SUPPORTED_EXTENSIONS = TIER2_CODE_EXTENSIONS | TIER2_TEMPLATE_EXTENSIONS
 
+# Mirrors WORKFLOW_EXTENSIONS and WORKFLOW_DIRECTORY in test_code_scope.py. `.yml` is in
+# scope only under `.github/workflows/`: ordinary YAML is not a workflow and the workflow
+# rules are not true of it.
+TIER2_WORKFLOW_EXTENSIONS = {".yml", ".yaml"}
+TIER2_WORKFLOW_DIRECTORY = ".github/workflows/"
+
 HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
@@ -57,9 +63,17 @@ def file_extension(path: str) -> str:
     return match.group(1) if match else ""
 
 
+def is_workflow_path(path: str) -> bool:
+    """A GitHub Actions workflow: `.yml`/`.yaml` under a `.github/workflows/` segment."""
+    normalized = str(path or "").replace("\\", "/").lower()
+    if file_extension(normalized) not in TIER2_WORKFLOW_EXTENSIONS:
+        return False
+    return normalized.startswith(TIER2_WORKFLOW_DIRECTORY) or f"/{TIER2_WORKFLOW_DIRECTORY}" in normalized
+
+
 def should_fetch_content(path: str) -> bool:
     path = str(path or "")
-    if file_extension(path) not in TIER2_SUPPORTED_EXTENSIONS:
+    if file_extension(path) not in TIER2_SUPPORTED_EXTENSIONS and not is_workflow_path(path):
         return False
     if path.startswith("dist/") or "node_modules/" in path:
         return False

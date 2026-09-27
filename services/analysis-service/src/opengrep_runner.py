@@ -23,9 +23,13 @@ from test_code_scope import (
     CODE_EXTENSIONS,
     SUPPORTED_EXTENSIONS,
     TEMPLATE_EXTENSIONS,
+    WORKFLOW_DIRECTORY,
+    WORKFLOW_EXTENSIONS,
     classify_findings,
     is_analyzable_path,
     is_runtime_scannable_path as _is_runtime_scannable_path,
+    is_tier2_scannable_path,
+    is_workflow_path,
 )
 
 RULES_DIR = Path(__file__).parent / "opengrep_rules"
@@ -559,6 +563,12 @@ def _enrich_metadata_from_match(
 # names the extensions it applies to in `paths: include`. A generic rule without that
 # include would read *every* file in the batch, `.py` and `.ts` alike, so the include is
 # what keeps the two sets apart.
+#
+# A GitHub Actions workflow is the third case and it is not an extension at all:
+# `WORKFLOW_EXTENSIONS` under `WORKFLOW_DIRECTORY`, decided by `is_tier2_scannable_path`.
+# `workflow_coverage.yml` reads those in `generic` mode too, and its includes name the
+# directory rather than the bare extension, because ordinary YAML elsewhere in a repository
+# is not a workflow and none of those rules is true of it.
 
 
 def _batch_limit(env_name: str, default: int) -> int:
@@ -1016,7 +1026,7 @@ def run_opengrep_with_limitations(files: List[Dict[str, Any]]) -> tuple:
     scannable = [
         f for f in files
         if is_analyzable_path(f.get("path", ""))
-        and _file_extension(f.get("path", "")) in SUPPORTED_EXTENSIONS
+        and is_tier2_scannable_path(f.get("path", ""))
         and (f.get("patch") or f.get("content"))
     ]
 

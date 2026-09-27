@@ -75,6 +75,28 @@ TEMPLATE_EXTENSIONS = {
 
 SUPPORTED_EXTENSIONS = CODE_EXTENSIONS | TEMPLATE_EXTENSIONS
 
+# A GitHub Actions workflow. This is the one part of the tier 2 scope that an extension
+# alone cannot decide, and it is deliberately not folded into `SUPPORTED_EXTENSIONS`.
+#
+# `.yml` is the most common configuration extension there is. A repository's Kubernetes
+# manifests, its Helm values, its `docker-compose.yml`, its CI config for another provider
+# and its own `.mitig8it.yml` are all YAML, and `run:`, `ref:` and `permissions:` mean
+# something different in each of them. Admitting `.yml` by extension would put the workflow
+# rules over all of that, and would also make the product fetch the content of every YAML
+# file in every pull request to find the handful that are workflows.
+#
+# So the gate is the path, not the extension: `.yml` and `.yaml` are in scope only under a
+# `.github/workflows/` directory, which is the only place GitHub reads a workflow from. The
+# rules in `opengrep_rules/workflow_coverage.yml` repeat the restriction in their own
+# `paths: include`, because a `generic` rule with no include reads every file in the batch;
+# the two are independent and both are asserted.
+WORKFLOW_EXTENSIONS = {".yml", ".yaml"}
+
+# The directory GitHub loads workflows from. Matched as a path segment, so a workflow in a
+# nested project (`packages/api/.github/workflows/ci.yml`) is in scope and a directory that
+# merely ends in `github/workflows` is not.
+WORKFLOW_DIRECTORY = ".github/workflows/"
+
 
 def _normalize_path(path: Any) -> str:
     return str(path or "").strip().replace("\\", "/").lower()
@@ -134,6 +156,40 @@ def is_template_path(path: Any) -> bool:
     name = normalized.rsplit("/", 1)[-1]
     _, dot, extension = name.rpartition(".")
     return bool(dot) and f".{extension}" in TEMPLATE_EXTENSIONS
+
+
+def is_workflow_path(path: Any) -> bool:
+    """True for a GitHub Actions workflow: `.yml` or `.yaml` under `.github/workflows/`.
+
+    The directory is matched as a path segment, so `packages/api/.github/workflows/ci.yml` is
+    a workflow and `vendor/notgithub/workflows/ci.yml` is not.
+    """
+    normalized = _normalize_path(path)
+    if not normalized:
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    _, dot, extension = name.rpartition(".")
+    if not dot or f".{extension}" not in WORKFLOW_EXTENSIONS:
+        return False
+    return normalized.startswith(WORKFLOW_DIRECTORY) or f"/{WORKFLOW_DIRECTORY}" in normalized
+
+
+def is_tier2_scannable_path(path: Any) -> bool:
+    """True for every path tier 2 reads in full: a source extension, a template, or a workflow.
+
+    This is the single answer to "does tier 2 get this file", and it is a path question rather
+    than an extension question because of the workflow case. `opengrep_runner` gates the
+    scanner on it, and the three ported copies -- `prAnalysisOrchestrator.js`,
+    `scripts/replay/prodfilters.py` and `action/orchestrator/pr_scope.py` -- mirror it.
+    """
+    normalized = _normalize_path(path)
+    if not normalized:
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    _, dot, extension = name.rpartition(".")
+    if dot and f".{extension}" in SUPPORTED_EXTENSIONS:
+        return True
+    return is_workflow_path(normalized)
 
 
 def is_non_code_text_path(path: Any) -> bool:

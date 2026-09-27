@@ -90,6 +90,54 @@ def test_tier2_extensions_match_the_api_service_constant():
     )
 
 
+def test_workflow_scope_matches_the_api_service_constants():
+    """The workflow half of the scope is a path, so both halves of it are compared.
+
+    A GitHub Actions workflow is the one thing tier 2 reads that an extension cannot identify:
+    `.yml` is in scope under `.github/workflows/` and nowhere else. If the action disagreed
+    about either the extensions or the directory it would review a different set of files from
+    the hosted product, in whichever direction the drift went.
+    """
+    source = read(API_ORCHESTRATOR)
+    extensions = re.search(r"const TIER2_WORKFLOW_EXTENSIONS = \[(.*?)\];", source, re.DOTALL)
+    assert extensions, "TIER2_WORKFLOW_EXTENSIONS is no longer an array literal"
+    assert (
+        frozenset(re.findall(r"'([^']+)'", extensions.group(1)))
+        == pr_scope.TIER2_WORKFLOW_EXTENSIONS
+    )
+    directory = re.search(r"const TIER2_WORKFLOW_DIRECTORY = '([^']+)';", source)
+    assert directory, "TIER2_WORKFLOW_DIRECTORY is no longer a string constant"
+    assert directory.group(1) == pr_scope.TIER2_WORKFLOW_DIRECTORY
+
+    scope = REPO_ROOT / "services/analysis-service/src/test_code_scope.py"
+    scope_source = read(scope)
+    scope_extensions = re.search(r"WORKFLOW_EXTENSIONS = \{(.*?)\}", scope_source, re.DOTALL)
+    assert scope_extensions, "WORKFLOW_EXTENSIONS is no longer a set literal"
+    assert (
+        frozenset(re.findall(r'"([^"]+)"', scope_extensions.group(1)))
+        == pr_scope.TIER2_WORKFLOW_EXTENSIONS
+    )
+    scope_directory = re.search(r'WORKFLOW_DIRECTORY = "([^"]+)"', scope_source)
+    assert scope_directory, "WORKFLOW_DIRECTORY is no longer a string constant"
+    assert scope_directory.group(1) == pr_scope.TIER2_WORKFLOW_DIRECTORY
+
+
+def test_a_workflow_is_analysed_and_ordinary_yaml_is_not():
+    """The behaviour, not just the literals: this is what a maintainer sees in the summary."""
+    assert pr_scope.should_fetch_full_file_content({"path": ".github/workflows/ci.yml"}) is True
+    assert pr_scope.should_fetch_full_file_content({"path": ".github/workflows/ci.yaml"}) is True
+    assert pr_scope.should_fetch_full_file_content({"path": "docker-compose.yml"}) is False
+    assert pr_scope.should_fetch_full_file_content({"path": ".github/dependabot.yml"}) is False
+    report = pr_scope.scope_report(
+        [
+            {"filename": ".github/workflows/ci.yml", "status": "modified"},
+            {"filename": "README.md", "status": "modified"},
+        ]
+    )
+    assert report["analysed"] == 1
+    assert report["skipped"] == 1
+
+
 def test_inline_comment_cap_matches_the_api_service_constant():
     source = read(API_ORCHESTRATOR)
     match = re.search(r"const INLINE_COMMENT_CAP = (\d+);", source)

@@ -33,6 +33,24 @@ const TIER2_SUPPORTED_EXTENSIONS = new Set([
   ...TIER2_TEMPLATE_EXTENSIONS,
 ]);
 
+// GitHub Actions workflows. Mirrors WORKFLOW_EXTENSIONS and WORKFLOW_DIRECTORY in
+// services/analysis-service/src/test_code_scope.py. These are deliberately not folded into
+// TIER2_SUPPORTED_EXTENSIONS: `.yml` is the most common configuration extension there is, and
+// a repository's manifests, compose files and other providers' CI config are not workflows.
+// The gate is the path, so only `.github/workflows/` is fetched.
+const TIER2_WORKFLOW_EXTENSIONS = [
+  '.yml', '.yaml',
+];
+
+const TIER2_WORKFLOW_DIRECTORY = '.github/workflows/';
+
+function isWorkflowPath(path) {
+  const normalized = String(path || '').replace(/\\/g, '/').toLowerCase();
+  if (!TIER2_WORKFLOW_EXTENSIONS.includes(fileExtension(normalized))) return false;
+  return normalized.startsWith(TIER2_WORKFLOW_DIRECTORY)
+    || normalized.includes(`/${TIER2_WORKFLOW_DIRECTORY}`);
+}
+
 function markdownEscape(text) {
   return String(text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -501,7 +519,7 @@ function fileExtension(path) {
 function shouldFetchFullFileContent(file) {
   const path = String(file?.path || '');
   const ext = fileExtension(path);
-  if (!TIER2_SUPPORTED_EXTENSIONS.has(ext)) return false;
+  if (!TIER2_SUPPORTED_EXTENSIONS.has(ext) && !isWorkflowPath(path)) return false;
   if (path.startsWith('dist/') || path.includes('node_modules/')) return false;
   if (path.endsWith('.min.js') || path.endsWith('.min.css')) return false;
   return true;
@@ -1665,6 +1683,7 @@ module.exports = {
     explainInlineCommentDecision,
     isInfoFinding,
     isTestCodePath,
+    isWorkflowPath,
     normalizeLimitations,
     normalizeSuggestionPatch,
     planInlineComments,
