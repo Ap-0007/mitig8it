@@ -73,6 +73,11 @@ def parse_action_reference(line: str) -> Optional[Dict[str, str]]:
 
 
 def _request(url: str) -> Optional[dict]:
+    # The only host this module ever reads is the GitHub API over https, and the caller builds
+    # the url from a reference the scanner matched. Refusing anything else here means a crafted
+    # `uses:` value can never turn this lookup into a request somewhere of its choosing.
+    if not url.startswith(f"{GITHUB_API}/"):
+        return None
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "mitig8it-analysis",
@@ -81,7 +86,8 @@ def _request(url: str) -> Optional[dict]:
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=LOOKUP_TIMEOUT_SECONDS) as response:
+        # The guard above pins the scheme and the host, which is what makes this safe.
+        with urllib.request.urlopen(request, timeout=LOOKUP_TIMEOUT_SECONDS) as response:  # nosec B310
             if response.status != 200:
                 return None
             return json.loads(response.read().decode("utf-8", errors="replace"))
