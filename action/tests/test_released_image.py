@@ -16,6 +16,7 @@ the defect the pull exists to fix.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -260,6 +261,85 @@ def test_the_committed_manifest_claims_no_release():
         f"{MANIFEST} claims a release on a branch: {values}"
     )
     assert "release.yml" in text, "the file does not say what writes it"
+
+
+def test_the_file_the_release_writes_is_the_file_the_action_accepts(tmp_path):
+    """The loop, closed, without a registry and without Docker.
+
+    One program writes `released-image.env` (a Python heredoc in release.yml) and another reads it
+    (a bash step in action.yml). Nothing exercised the pair, and a mismatch between them would not
+    show up until a released ref silently built from source in a user's runner, which is the exact
+    failure the published image exists to prevent and the one nobody would report.
+
+    So: run the release workflow's own writer over a copy of the committed file, then hand the
+    result to the action's own decision and require a registry pull.
+    """
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        s for s in workflow["jobs"]["release"]["steps"]
+        if s.get("name") == "Write the release commit"
+    )
+    script = step["run"]
+    assert "<<'PYTHON'" in script, "the release no longer writes the file with a Python heredoc"
+    writer = script.split("<<'PYTHON'\n", 1)[1].split("\nPYTHON\n", 1)[0]
+
+    tree = tmp_path / "checkout"
+    (tree / "action").mkdir(parents=True)
+    target = tree / "action/released-image.env"
+    target.write_text(MANIFEST.read_text(encoding="utf-8"), encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-", "1.4.2", IMAGE, DIGEST],
+        input=writer,
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    written = target.read_text(encoding="utf-8")
+    assert "MITIG8IT_VERSION=1.4.2" in written
+    assert f"MITIG8IT_IMAGE={IMAGE}" in written
+    assert f"MITIG8IT_IMAGE_DIGEST={DIGEST}" in written
+    # The comments explaining the file survive, because they are what a reader finds it by.
+    assert "release.yml" in written
+
+    result = decide(tmp_path, repository=OURS, ref="v1.4.2", manifest=written)
+    assert result["source"] == "registry", result["_log"]
+    assert result["reference"] == f"{IMAGE}:1.4.2@{DIGEST}"
+
+    # And the major tag the release moves resolves to the same image.
+    assert decide(tmp_path, repository=OURS, ref="v1", manifest=written)["source"] == "registry"
+
+
+def test_the_release_writer_refuses_a_file_it_does_not_recognise(tmp_path):
+    """A `released-image.env` that lost a key must fail the release, not be released half-written."""
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        s for s in workflow["jobs"]["release"]["steps"]
+        if s.get("name") == "Write the release commit"
+    )
+    writer = step["run"].split("<<'PYTHON'\n", 1)[1].split("\nPYTHON\n", 1)[0]
+
+    tree = tmp_path / "checkout"
+    (tree / "action").mkdir(parents=True)
+    (tree / "action/released-image.env").write_text("MITIG8IT_VERSION=\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-", "1.4.2", IMAGE, DIGEST],
+        input=writer,
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0, "a file missing two of its three keys was accepted"
+    assert "MITIG8IT_IMAGE" in completed.stderr
 
 
 def test_every_build_step_is_skipped_when_the_image_was_pulled():
