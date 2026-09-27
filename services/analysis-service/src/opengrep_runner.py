@@ -31,6 +31,7 @@ from test_code_scope import (
     is_tier2_scannable_path,
     is_workflow_path,
 )
+from workflow_action_digest import action_reference_evidence
 
 RULES_DIR = Path(__file__).parent / "opengrep_rules"
 
@@ -249,6 +250,21 @@ def _build_evidence_details(metadata: Dict[str, Any]) -> Dict[str, Any]:
         "missing_control_type": metadata.get("missing_control_type"),
         "auto_fix_eligible": bool(metadata.get("auto_fix_eligible", False)),
     }
+
+
+UNPINNED_ACTION_RULE_ID = "cwe-1357.gha-third-party-action-unpinned"
+
+
+def _workflow_evidence_extra(check_id: str, code_snippet: str) -> Dict[str, Any]:
+    """Extra evidence a workflow finding carries for the repair side, or an empty mapping.
+
+    Only the unpinned-action rule needs it, and only because its repair depends on a fact that has
+    to be looked up while the product still has a network. Everything the injection repair needs is
+    already in the line it matched.
+    """
+    if check_id != UNPINNED_ACTION_RULE_ID:
+        return {}
+    return action_reference_evidence(str(code_snippet or "").split("\n")[0])
 
 
 def _normalize_trace_line(value: Any) -> Optional[int]:
@@ -888,6 +904,13 @@ def _build_finding(
     )
     evidence_details = _build_evidence_details(metadata)
     evidence_details["trace_steps"] = trace_steps
+    workflow_extra = _workflow_evidence_extra(check_id, code_snippet)
+    if workflow_extra:
+        # The repair service cannot resolve a digest itself: its sandbox has no egress, and that
+        # is the property the verification story rests on. So the reference, and the digest when a
+        # lookup answered, ride on the finding from here.
+        extra = evidence_details.get("extra")
+        evidence_details["extra"] = {**extra, **workflow_extra} if isinstance(extra, dict) else workflow_extra
 
     finding = {
         "rule_id": f"opengrep.{check_id}",
