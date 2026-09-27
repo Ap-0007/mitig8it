@@ -3,10 +3,10 @@
 // call that happens on import, so nothing a generated proof does changes what reaches the
 // command. The service refuses to write a proof, as module_scope_source_not_controllable, and
 // the repair is therefore asserted statically rather than executed.
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const os = require('node:os');
 
 const account = os.userInfo().username;
-const archive = execSync(`tar -czf /backup/${account}.tgz /srv/${account}`).toString();
+const archive = execFileSync('tar', ['-czf', `/backup/${account}.tgz`, `/srv/${account}`]).toString();
 
 module.exports = { archive, account };

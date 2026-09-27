@@ -162,6 +162,11 @@ def validate_fixture(fixture_dir: Path, fixture: dict[str, Any]) -> None:
         raise FixtureError(f"{fixture['id']}: unsupported seed family")
     if fixture["kind"] in NEGATIVE_KINDS and fixture["expected_state"] != "unsupported":
         raise FixtureError(f"{fixture['id']}: negative/adversarial cases must require abstention")
+    expected_level = fixture.get("expected_verification_level")
+    if expected_level is not None and expected_level not in VERIFICATION_LEVELS:
+        raise FixtureError(f"{fixture['id']}: expected_verification_level is not a verification level")
+    if expected_level is not None and fixture["kind"] != "supported":
+        raise FixtureError(f"{fixture['id']}: only a supported fixture can expect a verification level")
     validate_verification_checks(fixture)
     budget = fixture["budget"]
     if not isinstance(budget, dict) or any(not isinstance(budget.get(key), (int, float)) or budget[key] < 0 for key in DEFAULT_BUDGET):
@@ -448,8 +453,25 @@ SCRIPTED_PROVIDER_KIND = "scripted-provider"
 LIVE_PROVIDER_KIND = "live-provider"
 REMOTE_PROVIDER_KIND = "unknown-remote-provider"
 DEVELOPMENT_VERIFICATION_LEVEL = "development_unverified"
+ISOLATED_JOB_VERIFICATION_LEVEL = "isolated_job"
 PRODUCTION_VERIFICATION_LEVEL = "independent_sandbox"
-VERIFICATION_LEVELS = {DEVELOPMENT_VERIFICATION_LEVEL, PRODUCTION_VERIFICATION_LEVEL}
+# The level where nothing was executed. A fixture that expects it says so with
+# `expected_verification_level`, and a fixture that does not expect it is failed for reporting it:
+# a case that quietly dropped from an executed proof to an asserted one would otherwise read as a
+# pass. `services/remediation-service/contracts/repair-v1.md` states its five clauses.
+STATIC_ASSERTION_VERIFICATION_LEVEL = "static_assertion"
+# Weakest first, mirroring VERIFICATION_LEVEL_ORDER in the repair service's verifier.
+VERIFICATION_LEVEL_ORDER = (
+    STATIC_ASSERTION_VERIFICATION_LEVEL,
+    DEVELOPMENT_VERIFICATION_LEVEL,
+    ISOLATED_JOB_VERIFICATION_LEVEL,
+    PRODUCTION_VERIFICATION_LEVEL,
+)
+VERIFICATION_LEVELS = set(VERIFICATION_LEVEL_ORDER)
+# What a local adapter may report. It runs the development subprocess sandbox, so anything but
+# `development_unverified` would be a mislabelled result, except for a fixture that declares the
+# static assertion, where nothing runs in a sandbox at all.
+LOCAL_VERIFICATION_LEVELS = {DEVELOPMENT_VERIFICATION_LEVEL, STATIC_ASSERTION_VERIFICATION_LEVEL}
 REMOTE_CONTRACT_NOTE = (
     "Results produced against a deployed service are graded at the verification level that "
     "service reported. This harness cannot observe which provider the service used, so "
@@ -483,9 +505,10 @@ def load_service_modules() -> dict[str, Any]:
         reference_replacements,
     )
     from src.sandbox import InProcessSandboxBroker, LocalSubprocessDriver  # noqa: PLC0415
-    from src.verification import Verifier  # noqa: PLC0415
+    from src.verification import Verifier, create_rule_oracle  # noqa: PLC0415
 
     return {
+        "create_rule_oracle": create_rule_oracle,
         "ProviderAction": ProviderAction,
         "RepairAgent": RepairAgent,
         "OpenAICompatibleProvider": OpenAICompatibleProvider,
@@ -522,7 +545,27 @@ class ScriptedFixtureProvider:
         # proved first leaves this at zero, because the provider is never consulted at all.
         self.script_exhausted_calls = 0
         repairable = [unit for unit in units if isinstance(unit.get("replacement"), str)]
-        if not repairable:
+        # A fixture that declares the static assertion declares that no regression test could
+        # demonstrate its repair, so the provider double must not pretend one could. Without this
+        # the double always supplies a reproducer that re-runs the fixture's own trusted check, the
+        # sandbox executes it, and the case verifies at `development_unverified` instead: the
+        # benchmark would be measuring the double rather than the level the fixture is about.
+        # Abstaining leaves the template pass and the static assertion as the only route, which is
+        # the state a real finding of this shape is in.
+        if fixture.get("expected_verification_level") == STATIC_ASSERTION_VERIFICATION_LEVEL:
+            self.actions = [
+                action(
+                    "abstain",
+                    {
+                        "reason_code": "fixture_expects_a_static_assertion",
+                        "explanation": "No regression test can demonstrate this repair, so the deterministic "
+                                       "template patch is asserted statically instead of being executed.",
+                    },
+                    input_tokens=8,
+                    output_tokens=8,
+                )
+            ]
+        elif not repairable:
             self.actions = [
                 action(
                     "abstain",
@@ -632,7 +675,12 @@ def engine_local_adapter(
     def agent_factory(prepared: Any) -> Any:
         """One agent per connected finding group; the engine calls this once per group."""
         broker = modules["InProcessSandboxBroker"](modules["LocalSubprocessDriver"]())
-        verifier = modules["Verifier"](broker)
+        # The rule oracle, so a fixture that declares the static assertion can reach it. It is the
+        # in-process one here: the analysis service is a sibling in this checkout, and a benchmark
+        # that posted over HTTP would be measuring a deployment rather than the engine. None when
+        # the analysis service is not importable, and then a fixture expecting the level fails
+        # rather than passing at another one.
+        verifier = modules["Verifier"](broker, modules["create_rule_oracle"]())
         if provider_kind == LIVE_PROVIDER_KIND:
             settings = live_provider_settings()
             provider = modules["OpenAICompatibleProvider"](
@@ -773,10 +821,20 @@ def evaluate_fixture(
         outcome = "passed" if state == "unsupported" else "failed"
         reason = reason or (None if outcome == "passed" else "unsafe_or_missing_abstention")
     elif adapter in GRADED_ADAPTERS:
-        # A local adapter always runs in the development sandbox, so anything other than
-        # development_unverified would be a mislabelled result. A deployed service may report
-        # either level, and the level it reports is what the report is labelled with.
-        permitted = {DEVELOPMENT_VERIFICATION_LEVEL} if adapter in LOCAL_ADAPTERS else VERIFICATION_LEVELS
+        # A local adapter runs the development subprocess sandbox, so anything other than
+        # development_unverified would be a mislabelled result, except that a statically asserted
+        # candidate ran in no sandbox at all and is therefore also possible there. A deployed
+        # service may report any level, and the level it reports is what the report is labelled
+        # with.
+        #
+        # A fixture that declares `expected_verification_level` is held to exactly that level,
+        # both ways. Without that, a case whose repair quietly stopped being executed and became
+        # an assertion would still read as a pass, and a case expected to be asserted could pass
+        # on an executed proof that the fixture's shape says is impossible.
+        permitted = LOCAL_VERIFICATION_LEVELS if adapter in LOCAL_ADAPTERS else VERIFICATION_LEVELS
+        expected_level = fixture.get("expected_verification_level")
+        if expected_level is not None:
+            permitted = {expected_level}
         if state != "ready":
             outcome, reason = "failed", reason or "no_verified_candidate"
         elif level not in permitted:
@@ -829,8 +887,23 @@ def summarize(results: list[CaseResult]) -> dict[str, Any]:
         "known_failures": [result.fixture_id for result in results if result.outcome == "failed" and result.known_failure],
         "unexpected_failures": [result.fixture_id for result in results if result.outcome == "failed" and not result.known_failure],
         "inconclusive": [result.fixture_id for result in results if result.outcome == "inconclusive"],
+        # Which cases verify how. Two cases that both pass are not the same result when one ran a
+        # regression test and the other only re-ran a rule over two files, so the suite says
+        # which, per level, rather than reporting one pass count over both.
+        "passed_by_verification_level": passed_by_verification_level(results),
         "total_cost_usd": round(costs, 6), "cost_per_attempt_usd": round(costs / len(results), 6) if results else 0,
     }
+
+
+def passed_by_verification_level(results: list[CaseResult]) -> dict[str, list[str]]:
+    """Every passing case's fixture id, grouped by the level it verified at, weakest first."""
+    grouped: dict[str, list[str]] = {}
+    for result in results:
+        if result.outcome != "passed" or result.kind != "supported":
+            continue
+        grouped.setdefault(result.verification_level or "none", []).append(result.fixture_id)
+    order = {level: index for index, level in enumerate(VERIFICATION_LEVEL_ORDER)}
+    return {level: sorted(grouped[level]) for level in sorted(grouped, key=lambda item: (order.get(item, -1), item))}
 
 
 def release_gate(fixtures: list[tuple[Path, dict[str, Any]]], results: list[CaseResult]) -> dict[str, Any]:
