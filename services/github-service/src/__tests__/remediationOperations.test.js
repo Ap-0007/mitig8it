@@ -445,6 +445,29 @@ test.each([
   expect(comments[0].body).toContain(`Verified: regression test failed on the original code and passed with this change (${where}).`);
 });
 
+// The one level where no test ran gets a different sentence, because the sentence above claims a
+// test result. `contracts/repair-v1.md` states the five clauses it summarizes.
+test('the static assertion level says what was checked and that nothing was executed', async () => {
+  const comments = findingCommentGitHub({ id: 77, body: `${FINDING_MARKER}\n**SQL injection**\nUse parameters.`, user: { login: 'mitig8it[bot]' }, path: 'services/orders.js', line: 12, side: 'RIGHT' });
+  const result = await publishFindingFixSections(fixPayload([fixSection({
+    verification_level: 'static_assertion',
+    proof: '',
+    evidence: [],
+    limitations: ['nothing was executed: the repair was checked by re-running the rule that flagged the finding over the original and the patched file, not by running a test'],
+  })]));
+  expect(result.state).toBe('published');
+  const body = comments[0].body;
+  expect(body).toContain('Verified: the rule that flagged this line no longer matches the patched file and nothing else in the file changed. No code was executed.');
+  // It must never claim a test ran, in the verified line or in either fallback below it.
+  expect(body).not.toContain('regression test failed on the original code');
+  expect(body).not.toContain('development sandbox');
+  expect(body).not.toContain('verification passed in the sandbox');
+  // And the details say what was and was not established, without inventing a sandbox.
+  expect(body).toContain('**Proof:** the rule that produced this finding matched the original file at this line and matches no line of the patched file.');
+  expect(body).toContain('**Evidence:** no rule that was not already matching this file matches the patched file');
+  expect(body).toContain('**Limitations:** nothing was executed:');
+});
+
 test('the Cloud Run job sandbox is never described to a reviewer as a development sandbox', async () => {
   const comments = findingCommentGitHub({ id: 77, body: `${FINDING_MARKER}\n**SQL injection**\nUse parameters.`, user: { login: 'mitig8it[bot]' }, path: 'services/orders.js', line: 12, side: 'RIGHT' });
   await publishFindingFixSections(fixPayload([fixSection({

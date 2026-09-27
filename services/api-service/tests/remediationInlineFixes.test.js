@@ -508,6 +508,19 @@ test('the candidate that keeps the suggestion does not depend on the order the c
   expect(carrying(inline.buildSections(sameLineContext([a, verified])))).toMatchObject({ candidate_id: CANDIDATE_B });
 });
 
+// Two candidates on the same lines, one verified by execution and one only asserted. The
+// executed one keeps the suggestion, because the trust order is the repair service's own
+// weakest-first list and the static assertion is the weakest entry in it. Before that order was
+// derived, a level missing from the local table ranked 0 and lost to everything by omission.
+test('an executed fix keeps the suggestion over a statically asserted one on the same lines', () => {
+  const asserted = provenCandidate(CANDIDATE_A, 'f1', FIXED, { verification_level: 'static_assertion' });
+  const executed = provenCandidate(CANDIDATE_B, 'f5', ALT_FIXED, { verification_level: 'development_unverified' });
+  const carrying = (sections) => sections.find((section) => section.hunk);
+  expect(carrying(inline.buildSections(sameLineContext([asserted, executed])))).toMatchObject({ candidate_id: CANDIDATE_B });
+  // And the reverse arrival order gives the same answer.
+  expect(carrying(inline.buildSections(sameLineContext([executed, asserted])))).toMatchObject({ candidate_id: CANDIDATE_B });
+});
+
 test('groupByOverlap puts transitively overlapping hunks in one group and leaves disjoint ones apart', () => {
   const entry = (start, end) => ({ range: { start, end } });
   const shape = (groups) => groups.map((group) => [group.start, group.end, group.items.length]);

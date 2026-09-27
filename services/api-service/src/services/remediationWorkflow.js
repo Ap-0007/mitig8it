@@ -217,6 +217,7 @@ function repairPolicy(policy) {
   const remediationPolicy = require('./remediationPolicy');
   selected.allow_development_verification = remediationPolicy.allowDevelopmentVerification();
   selected.allow_isolated_job_verification = remediationPolicy.allowIsolatedJobVerification();
+  selected.allow_static_assertion_verification = remediationPolicy.allowStaticAssertionVerification();
   return selected;
 }
 

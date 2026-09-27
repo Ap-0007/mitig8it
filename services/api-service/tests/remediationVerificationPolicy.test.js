@@ -11,6 +11,7 @@ const POLICY_ENV = [
   'REMEDIATION_INPUT_USD_PER_MILLION_TOKENS', 'REMEDIATION_OUTPUT_USD_PER_MILLION_TOKENS',
   'REMEDIATION_REQUIRE_GENERATED_REGRESSION_TEST', 'REMEDIATION_RUN_REPOSITORY_TESTS',
   'REMEDIATION_ALLOW_DEVELOPMENT_VERIFICATION', 'REMEDIATION_ALLOW_ISOLATED_JOB_VERIFICATION',
+  'REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION',
 ];
 
 function configure() {
@@ -104,12 +105,15 @@ describe('remediation verification policy', () => {
     expect(selected.max_revisions).toBe(2);
   });
 
-  // The three levels the repair service can report. `independent_sandbox` is the
+  // The four levels the repair service can report. `independent_sandbox` is the
   // Kubernetes/gVisor sandbox and always passes. `isolated_job` is the Cloud Run job sandbox:
   // separate containers, a check user holding none of the job's credentials, and a network the
   // job's own probes measured as unreachable, so it passes by default and an operator who will
   // accept nothing weaker than gVisor turns it off. `development_unverified` is repository code
   // running in the service's own container and stays off unless an operator opts in.
+  // `static_assertion` is the one where nothing ran at all: the rule that flagged the finding
+  // was re-run over the original and the patched file. It is the weakest of the four, it is
+  // never reached by a finding whose repair could have been executed, and it passes by default.
   describe('which verification levels may be applied', () => {
     test('the isolated Cloud Run job sandbox is accepted by default and the development sandbox is not', () => {
       expect(policy.allowIsolatedJobVerification()).toBe(true);
@@ -139,11 +143,20 @@ describe('remediation verification policy', () => {
       expect(policy.verificationLevelPermitted('none')).toBe(false);
     });
 
-    test('the capability report states both verification flags', () => {
+    test('the capability report states every verification flag', () => {
       expect(policy.capabilityReport().isolated_job_verification_allowed).toBe(true);
       expect(policy.capabilityReport().development_verification_allowed).toBe(false);
+      expect(policy.capabilityReport().static_assertion_verification_allowed).toBe(true);
       process.env.REMEDIATION_ALLOW_ISOLATED_JOB_VERIFICATION = 'false';
       expect(policy.capabilityReport().isolated_job_verification_allowed).toBe(false);
+      process.env.REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION = 'false';
+      expect(policy.capabilityReport().static_assertion_verification_allowed).toBe(false);
+    });
+
+    test('the capability report carries the level order, weakest first', () => {
+      expect(policy.capabilityReport().verification_levels).toEqual([
+        'static_assertion', 'development_unverified', 'isolated_job', 'independent_sandbox',
+      ]);
     });
 
     test('the repair request policy tells the repair service which levels it may report', () => {
@@ -151,13 +164,45 @@ describe('remediation verification policy', () => {
       const selected = repairPolicy({ ...policy.DEFAULT_POLICY, ...policy.getPolicy() });
       expect(selected.allow_isolated_job_verification).toBe(true);
       expect(selected.allow_development_verification).toBe(false);
+      expect(selected.allow_static_assertion_verification).toBe(true);
     });
 
     test('a control plane that refuses the level says so in the request it sends', () => {
       process.env.REMEDIATION_ALLOW_ISOLATED_JOB_VERIFICATION = 'false';
+      process.env.REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION = 'false';
       const { repairPolicy } = require('../src/services/remediationWorkflow');
       const selected = repairPolicy({ ...policy.DEFAULT_POLICY, ...policy.getPolicy() });
       expect(selected.allow_isolated_job_verification).toBe(false);
+      expect(selected.allow_static_assertion_verification).toBe(false);
+    });
+  });
+
+  // The weakest level, and the one that says nothing ran. It is opt-out rather than opt-in
+  // because it is never an upgrade: the repair service reaches it only for a family that
+  // declares it or for a finding whose execution was refused for a recorded reason.
+  describe('the static assertion level', () => {
+    test('it is accepted by default and an operator can refuse it', () => {
+      expect(policy.allowStaticAssertionVerification()).toBe(true);
+      expect(policy.verificationLevelPermitted('static_assertion')).toBe(true);
+      process.env.REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION = 'false';
+      expect(policy.allowStaticAssertionVerification()).toBe(false);
+      expect(policy.verificationLevelPermitted('static_assertion')).toBe(false);
+    });
+
+    test('refusing it leaves every executed level alone', () => {
+      process.env.REMEDIATION_ALLOW_STATIC_ASSERTION_VERIFICATION = 'false';
+      expect(policy.verificationLevelPermitted('independent_sandbox')).toBe(true);
+      expect(policy.verificationLevelPermitted('isolated_job')).toBe(true);
+    });
+
+    test('it is the weakest level in the order the control plane ranks by', () => {
+      expect(policy.VERIFICATION_LEVEL_ORDER[0]).toBe('static_assertion');
+      expect(policy.VERIFICATION_LEVEL_ORDER).toEqual([
+        policy.STATIC_ASSERTION_VERIFICATION_LEVEL,
+        policy.DEVELOPMENT_VERIFICATION_LEVEL,
+        policy.ISOLATED_JOB_VERIFICATION_LEVEL,
+        policy.PRODUCTION_VERIFICATION_LEVEL,
+      ]);
     });
   });
 });

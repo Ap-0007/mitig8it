@@ -173,6 +173,21 @@ it('names the Cloud Run job sandbox without the development warning', async () =
   expect(screen.getByText('verification ran in an isolated Cloud Run job container without a read-only root filesystem or a gVisor runtime class')).toBeInTheDocument()
 })
 
+// The weakest level: nothing ran. It gets the amber warning like the development level, and its
+// text says what was checked rather than naming a sandbox that does not exist for it.
+it('warns in amber and names no sandbox for a statically asserted candidate', async () => {
+  remediationAPI.preview.mockResolvedValue({ ...preview,
+    candidates: [{ ...fixOne, verification_level: 'static_assertion', evidence: null,
+      limitations: ['nothing was executed: the repair was checked by re-running the rule that flagged the finding over the original and the patched file, not by running a test'] }] })
+  render(<RepairSession pullRequestId="pr-1" />)
+  const warning = await screen.findByText(/Verification level: static assertion\. No code was executed/)
+  expect(warning.className).toContain('amber')
+  expect(warning.textContent).toContain('no other rule started matching')
+  expect(warning.textContent).toContain('Nothing demonstrates the vulnerability was reachable before the change')
+  expect(screen.queryByText(/isolated sandbox/)).not.toBeInTheDocument()
+  expect(screen.getByText(/nothing was executed: the repair was checked by re-running the rule/)).toBeInTheDocument()
+})
+
 it('names the Kubernetes sandbox as an isolated sandbox', async () => {
   remediationAPI.preview.mockResolvedValue({ ...preview,
     candidates: [{ ...fixOne, verification_level: 'independent_sandbox', evidence: null, limitations: [] }] })
