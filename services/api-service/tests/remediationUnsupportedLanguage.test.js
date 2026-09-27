@@ -95,8 +95,39 @@ test('the supported suffixes are exactly the ones the repair service reads from 
   };
   expect(languages.JAVASCRIPT_SUFFIXES).toEqual(suffixes('JAVASCRIPT_SUFFIXES'));
   expect(languages.PYTHON_SUFFIXES).toEqual(suffixes('PYTHON_SUFFIXES'));
+  expect(languages.WORKFLOW_SUFFIXES).toEqual(suffixes('WORKFLOW_SUFFIXES'));
   expect([...languages.JAVASCRIPT_SUFFIXES].sort()).toEqual(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
   expect([...languages.PYTHON_SUFFIXES]).toEqual(['.py']);
+  expect([...languages.WORKFLOW_SUFFIXES].sort()).toEqual(['.yaml', '.yml']);
+  // Every language families.py declares has to be decided here too, or a family the repair
+  // service supports is excluded before a job is ever created, which is what happened to
+  // the workflow family on nebullii/test-only#136.
+  const declared = source.match(/SUPPORTED_LANGUAGES = \(([^)]*)\)/);
+  expect(declared).not.toBeNull();
+  const names = declared[1].split(',').map((item) => item.trim()).filter(Boolean);
+  expect(names.length).toBe(3);
+  const directory = source.match(/WORKFLOW_DIRECTORY = "([^"]+)"/);
+  expect(directory[1]).toBe(languages.WORKFLOW_DIRECTORY);
+});
+
+test('a workflow is a language, and a yaml file anywhere else is not', () => {
+  expect(languages.languageOfPath('.github/workflows/release.yml')).toBe('workflow');
+  expect(languages.languageOfPath('.github/workflows/nested/deploy.yaml')).toBe('workflow');
+  expect(languages.languageOfPath('vendor/app/.github/workflows/ci.yml')).toBe('workflow');
+  for (const notWorkflow of ['docker-compose.yml', '.github/dependabot.yml', 'k8s/deploy.yml', 'config/workflows/pipeline.yml']) {
+    expect(languages.languageOfPath(notWorkflow)).toBeNull();
+  }
+});
+
+test('a workflow finding is selected into a job rather than skipped', () => {
+  const rows = [
+    { id: 'a', path: '.github/workflows/release.yml' },
+    { id: 'b', path: 'docker-compose.yml' },
+    { id: 'c', path: 'services/orders.js' },
+  ];
+  const { supported, unsupported } = languages.partitionBySupportedLanguage(rows, (row) => row.path);
+  expect(supported.map((row) => row.id)).toEqual(['a', 'c']);
+  expect(unsupported.map((row) => row.id)).toEqual(['b']);
 });
 
 test('a path is read for its language exactly as PurePosixPath reads it', () => {
