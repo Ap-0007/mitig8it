@@ -315,6 +315,29 @@ PLACEHOLDER_VALUE_RE = re.compile(
 )
 REPEATED_CHARACTER_RE = re.compile(r"^(.)\1{7,}$")
 
+# A JWT-shaped string, captured in three pieces so the signature can be looked at on its own.
+JWT_SHAPED_RE = re.compile(r"\b(eyJ[A-Za-z0-9_\-]{6,})\.([A-Za-z0-9_\-]*)\.([A-Za-z0-9_\-]*)")
+
+
+def _is_unsigned_jwt(value: str) -> bool:
+    """A JWT with no signature, which anyone can mint and which therefore grants nothing.
+
+    `_verify_jwt` already refuses these for the format signal, and the entropy signal has to
+    refuse them too: otherwise the weaker signal re-reports under its own rule id exactly what
+    the stronger one examined and rejected, and tells the author to rotate a token that was
+    never a credential.
+
+    The September 2026 measurement is where this came from. Juice-shop's `alg:none` forgery
+    fixtures are `authorization: 'Bearer eyJ…fQ.'`, two segments and a trailing dot, and the
+    entropy signal reported both of them at 5.4 bits under the identifier `authorization`.
+    """
+    for header, _payload, signature in JWT_SHAPED_RE.findall(str(value or "")):
+        if len(signature) >= 10:
+            continue
+        if isinstance(_decode_base64url_json(header), dict):
+            return True
+    return False
+
 # Lockfiles. `.lock` and `.json` are already `is_data_path`, but `go.sum`, `pnpm-lock.yaml`
 # and `Pipfile.lock`'s siblings are not, and a lockfile is the single largest source of
 # legitimately high-entropy strings in any repository.
@@ -353,6 +376,7 @@ ENTROPY_EXCLUSION_REASONS = (
     "base64_asset",
     "value_echoes_name",
     "published_example",
+    "unsigned_jwt",
 )
 
 
@@ -381,6 +405,8 @@ def entropy_exclusion_reason(name: str, value: str) -> Optional[str]:
         return "placeholder_value"
     if is_published_example_value(text):
         return "published_example"
+    if _is_unsigned_jwt(text):
+        return "unsigned_jwt"
     if _is_base64_asset(text):
         return "base64_asset"
     if text.lower() == str(name or "").lower():
@@ -530,6 +556,12 @@ DOCUMENTATION_MARKER_RE = re.compile(
 PUBLISHED_EXAMPLE_BODIES = (
     # Stripe's documentation key, the one `security_rules.py` quotes in its own comment.
     "4eC39HqLyjWDarjtT1zdp7dc",
+    # The signature of the example token on jwt.io's front page, over the `{"sub":"1234567890",
+    # "name":"John Doe","iat":1516239022}` payload and the secret `your-256-bit-secret`. It is
+    # the single most copied JWT in existence, it passes `_verify_jwt` in full, and the
+    # September 2026 measurement found it committed in juice-shop's own specs. A token whose
+    # signing key is published on a documentation page is not a credential.
+    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
 )
 
 

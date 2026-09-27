@@ -267,13 +267,23 @@ class TestSetIntegrity:
         assert not unused, f"reasons documented but never exercised: {unused}"
 
     def test_every_gitleaksignore_entry_is_represented(self):
-        """Our own known false positives are in the set, by count.
+        """Our own known false positives are in the set, read out of `.gitleaksignore` itself.
 
-        `.gitleaksignore` has nine entries over six distinct lines: the idempotency key
-        appears in five files and the `sk-live-abc123def456` fixture in two.
+        By path, not by count. The idempotency key appears in five files and the
+        `sk-live-abc123def456` fixture in two, and a count would have let a case stand in for a
+        file it was never run against; the path is what decides scope, so each entry needs its
+        own case. Adding a line to `.gitleaksignore` without adding its case fails here.
         """
-        gitleaks_cases = [case for case in NO_FINDING_CASES if "gitleaksignore" in case["id"]]
-        assert len(gitleaks_cases) == 4, _ids(gitleaks_cases)
+        entries = {
+            line.strip().split(":")[1]
+            for line in (REPOSITORY_ROOT / ".gitleaksignore").read_text().split("\n")
+            if GITLEAKS_ENTRY_RE.match(line.strip())
+        }
+        assert entries, "the known-false-positive set was not found"
+        covered = {
+            case["path"] for case in NO_FINDING_CASES if "gitleaksignore" in case["id"]
+        }
+        assert entries - covered == set(), sorted(entries - covered)
 
 
 class TestTruePositivesStillFire:

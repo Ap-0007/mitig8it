@@ -5,8 +5,9 @@
     "measurement": "docs/validation/secrets-in-the-diff-2026-09.md",
     "clean_corpus": "the eleven public repositories of docs/validation/real-repo-replay-2026-09.md, 165 merged pull requests, replayed with scripts/replay/replay.py",
     "vulnerable_corpus": "benchmarks/vulnerable-corpus/labels.json, 23 repositories at pinned refs, replayed with scripts/replay/replay.py --snapshot",
-    "own_repository": ".gitleaksignore, whose nine entries are lines this repository's own secret scanner caught in our fixtures and a human then cleared",
-    "note": "No key in this file is a live credential. Every positive fixture body is a locally generated random string or a vendor-published example, and the negative fixtures are quoted from the corpora."
+    "own_repository": ".gitleaksignore, whose nine entries are lines this repository's own secret scanner caught in our fixtures and a human then cleared. Every entry has its own case, keyed on the path, because the path is what decides scope.",
+    "note": "No key in this file is a live credential, and since the fixtures became specifications rather than literals, no key in this file is a key at all: see the `fixtures` block.",
+    "redaction": "Where a case reproduces the shape of a real credential the measurement found in a public repository, the evidence names the repository, the path and the format, and the value is built from the case's own specification. The real value is recorded nowhere."
   },
   "signals": {
     "secret.format.known_key": "A published key format whose declared structure verified: the prefix, the exact length, the charset, and the format's own content where it has any.",
@@ -22,7 +23,8 @@
     "local_or_example_host": "The connection string reaches loopback, a documentation domain or a bare compose alias, so its password grants access to nothing.",
     "dotenv_placeholder_path": "The file is a .env.example or a sibling, whose whole purpose is placeholder values.",
     "path_scope": "The entropy signal does not run on lockfiles, prose, templates or data documents.",
-    "added_lines_only": "The line is context or a removal, so it is not this pull request's change."
+    "added_lines_only": "The line is context or a removal, so it is not this pull request's change.",
+    "unsigned_jwt": "The value carries a JWT with no signature. Anyone can mint one, so it grants nothing; the format signal already refuses it and the entropy signal must agree rather than re-report the same value under its own rule id."
   },
   "cases": [
     {
@@ -727,6 +729,147 @@
       "path": ".env",
       "line": "NODE_ENV=production",
       "evidence": "A real `.env` in the diff is not automatically a finding: the file has to carry something that is actually a credential, or every `.env` with a port number in it is a critical."
+    },
+    {
+      "id": "fp.published-example.jwt-io-token",
+      "expect": "no-finding",
+      "reason": "published_example",
+      "path": "frontend/src/app/app.guard.spec.ts",
+      "line": "        localStorage.setItem('token', '{{secret}}')",
+      "secret": {
+        "kind": "reassembled",
+        "joiner": ".",
+        "parts": [
+          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+          "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ",
+          "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        ],
+        "why": "The token on jwt.io's front page, the exact string the September 2026 measurement found committed in juice-shop. It passes the JWT format's structural verification in full, so only the published-example refusal can stop it and only this literal proves that refusal works. Stored as its three segments, none of which is a JWT."
+      },
+      "evidence": "Read by hand in juice-shop at frontend/src/app/app.guard.spec.ts:46 in the September 2026 measurement, and judged false. It is the example token on jwt.io's front page, signed with `your-256-bit-secret`, which is printed beside it. It passes the JWT format's structural verification in full, so only the published-example refusal can stop it, and every tutorial that shows a decoded JWT puts the same string in a repository."
+    },
+    {
+      "id": "fp.unsigned-jwt.authorization-header",
+      "expect": "no-finding",
+      "reason": "unsigned_jwt",
+      "path": "test/server/verify.unit.test.ts",
+      "line": "      req.headers = { authorization: 'Bearer {{secret}}' }",
+      "secret": {
+        "kind": "jwt",
+        "alg": "none",
+        "payload": {
+          "data": {
+            "email": "jwtn3d@"
+          },
+          "iat": 1508639612
+        },
+        "signature_length": 0
+      },
+      "evidence": "Read by hand in juice-shop at test/server/verify.unit.test.ts:283 and :291 in the September 2026 measurement, and judged false. The token has `alg:none` and an empty signature, so the JWT format refuses it; the entropy signal was reporting it anyway under the identifier `authorization`, which is the weaker signal re-claiming what the stronger one examined and rejected. The header and payload are rebuilt from the same claims rather than pasted, because what the case asserts is the shape."
+    },
+    {
+      "id": "fp.own-repo.gitleaksignore.idempotency-key-operations",
+      "expect": "no-finding",
+      "reason": "credential_name_excluded",
+      "path": "services/github-service/src/__tests__/remediationOperations.test.js",
+      "line": "      idempotency_key: 'idempotency-key-0001',",
+      "evidence": ".gitleaksignore entry 2 of 9. The same request de-duplication identifier, in a second file; the path is part of the case because the path decides scope, so one case per entry is what makes the coverage assertion mean anything."
+    },
+    {
+      "id": "fp.own-repo.gitleaksignore.idempotency-key-transport-parity",
+      "expect": "no-finding",
+      "reason": "credential_name_excluded",
+      "path": "services/github-service/src/__tests__/remediationTransportParity.test.js",
+      "line": "      idempotency_key: 'idempotency-key-0001',",
+      "evidence": ".gitleaksignore entry 3 of 9."
+    },
+    {
+      "id": "fp.own-repo.gitleaksignore.idempotency-key-internal-routes",
+      "expect": "no-finding",
+      "reason": "credential_name_excluded",
+      "path": "services/github-service/src/__tests__/internalRoutes.test.js",
+      "line": "      idempotency_key: 'idempotency-key-0001',",
+      "evidence": ".gitleaksignore entry 4 of 9."
+    },
+    {
+      "id": "fp.own-repo.gitleaksignore.idempotency-key-api-transport",
+      "expect": "no-finding",
+      "reason": "credential_name_excluded",
+      "path": "services/api-service/tests/githubRemediationTransport.test.js",
+      "line": "      idempotency_key: 'idempotency-key-0001',",
+      "evidence": ".gitleaksignore entry 5 of 9, and the one in a different service."
+    },
+    {
+      "id": "fp.own-repo.gitleaksignore.proof-module-closure-fixture",
+      "expect": "no-finding",
+      "reason": "random_core_too_short",
+      "path": "services/remediation-service/tests/test_proof_module_closure.py",
+      "line": "SECRET = 'const apiKey = \"sk-live-{{secret}}\";\\nmodule.exports = { apiKey };\\n'",
+      "secret": {
+        "kind": "entropy_value",
+        "charset": "hex",
+        "length": 12,
+        "seed": "fp.own-repo.gitleaksignore.dependency-installed-fixture"
+      },
+      "evidence": ".gitleaksignore entry 8 of 9: the same fixture literal as entry 7, in the proof-closure test, so it is built from the same seed and is the same string."
+    },
+    {
+      "id": "tp.entropy.object-property-credential-key",
+      "expect": "finding",
+      "signal": "secret.entropy.credential_assignment",
+      "secret_type": "high_entropy_assignment",
+      "path": "config/env/development.js",
+      "line": "   scannerApiKey: \"{{secret}}\",",
+      "secret": {
+        "kind": "entropy_value",
+        "charset": "base62",
+        "length": 26
+      },
+      "evidence": "The shape of a true positive read by hand in OWASP/NodeGoat at config/env/development.js:6 and config/env/test.js:6 in the September 2026 measurement: a scanner API key as an object property in a committed configuration module, outside test code. The value here is generated; the real one is redacted and recorded only as repository, path, line and format."
+    },
+    {
+      "id": "tp.entropy.password-keyword-argument",
+      "expect": "finding",
+      "signal": "secret.entropy.credential_assignment",
+      "secret_type": "high_entropy_assignment",
+      "path": "app/views.py",
+      "line": "            row = user_table(id=\"admin\", password=\"{{secret}}\")",
+      "secret": {
+        "kind": "entropy_value",
+        "charset": "hex",
+        "length": 32
+      },
+      "evidence": "The shape of three true positives read by hand in adeyosemanputra/pygoat at introduction/views.py:866, :870 and :872: an account password literal written into the database from application code. The identifier is `password` and the value is a 32-character digest, which the digest exclusion does not reach because that exclusion reads the identifier. Indented, so no template can rewrite it: the finding offers no fix and says to rotate."
+    },
+    {
+      "id": "tp.format.jwt-in-a-comment",
+      "expect": "finding",
+      "signal": "secret.format.known_key",
+      "secret_type": "jwt",
+      "path": "static/js/client.js",
+      "line": "    // myHeaders.append(\"Cookie\", \"jwt={{secret}}\");",
+      "secret": {
+        "kind": "jwt",
+        "alg": "HS256",
+        "payload": {
+          "sub": "1234567890"
+        },
+        "signature_length": 36
+      },
+      "evidence": "The shape of a true positive read by hand in adeyosemanputra/pygoat at introduction/static/js/a7.js:4: a signed session token commented out in shipped frontend JavaScript, with the same token live eighteen lines into a9.js. This is the case the module's refusal to strip comments exists for: a commented-out credential is still a committed credential."
+    },
+    {
+      "id": "tp.format.private-key-pem-inline-in-source",
+      "expect": "finding",
+      "signal": "secret.format.known_key",
+      "secret_type": "private_key_pem",
+      "path": "lib/insecurity.ts",
+      "line": "const privateKey = '-----BEGIN RSA PRIVATE KEY-----\\r\\n{{secret}}\\r\\n-----END RSA PRIVATE KEY-----'",
+      "secret": {
+        "kind": "pem",
+        "length": 64
+      },
+      "evidence": "The shape of the most consequential true positive of the whole measurement, read by hand in juice-shop at lib/insecurity.ts:21: a complete RSA private key inlined into a single-line JavaScript string in production source, not test code. The key body here is built from the case's seed; the real one is redacted and recorded only as repository, path, line and format. The armour marker is what the format verifies, and the `\\r\\n` escapes are why no template can rewrite the line."
     }
   ],
   "fixtures": {

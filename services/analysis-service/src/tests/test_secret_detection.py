@@ -29,7 +29,11 @@ def types_in(path, *lines, content=""):
     return [match.secret_type for match in sd.secret_matches(path, patch_of(*lines), content)]
 
 
-def jwt(alg="HS256", signature="SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"):
+# Not jwt.io's example signature. That one is now in `PUBLISHED_EXAMPLE_BODIES`, because the
+# September 2026 measurement found it committed in juice-shop's specs and a token whose signing
+# key is published on a documentation page is not a credential. A fixture signed with it would
+# assert the opposite of what the detector now does.
+def jwt(alg="HS256", signature="k8Rm2QpLzV4nB7xW1sT6yU3hJ9dF0gA5cE2vN8iO7bY"):
     def segment(payload):
         return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
@@ -180,6 +184,23 @@ class TestPublishedExamples:
         assert sd.is_published_example_value("abcdefghijklmnop")
         assert not sd.is_published_example_value(RANDOM_36)
 
+    def test_the_jwt_io_example_token_is_not_a_credential(self):
+        """The most copied JWT in existence, and it passes `_verify_jwt` in full.
+
+        Its signing key is `your-256-bit-secret`, printed beside it on jwt.io's front page, so
+        the token grants nothing. The September 2026 measurement found it committed in
+        juice-shop's own Angular specs, which is where this case came from; every tutorial that
+        shows a decoded JWT has the same string in it.
+        """
+        example = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        )
+        assert sd._verify_jwt(example), "the token is well formed; that is the point"
+        assert sd.is_published_example_value(example)
+        assert types_in("src/auth.js", f"const token = '{example}';") == []
+
 
 class TestEntropySignal:
     def test_a_random_value_under_a_credential_name_is_a_finding(self):
@@ -227,6 +248,27 @@ class TestEntropySignal:
     def test_the_named_exclusion_refuses_the_value(self, value, reason):
         assert sd.entropy_exclusion_reason("api_key", value) == reason
         assert types_in("src/cfg.py", f'api_key = "{value}"') == []
+
+    def test_an_unsigned_jwt_is_not_a_credential_the_entropy_signal_may_claim(self):
+        """The format signal refuses an `alg:none` token; the entropy signal has to agree.
+
+        Anyone can mint a token with no signature, so it grants nothing. What made this a
+        finding was the identifier: `authorization`, at 5.4 bits over 142 characters. The
+        September 2026 measurement read two of these in juice-shop's forgery fixtures, and they
+        are the case where the weaker signal was re-reporting under its own rule id exactly what
+        the stronger one had examined and rejected.
+        """
+        unsigned = (
+            "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0."
+            "eyJkYXRhIjp7ImVtYWlsIjoiand0bjNkQCJ9LCJpYXQiOjE1MDg2Mzk2MTJ9."
+        )
+        assert not sd._verify_jwt(unsigned)
+        assert sd.entropy_exclusion_reason("authorization", f"Bearer {unsigned}") == "unsigned_jwt"
+        assert types_in("src/a.ts", f"req.headers = {{ authorization: 'Bearer {unsigned}' }}") == []
+
+    def test_a_signed_jwt_is_still_reported_by_the_format_signal(self):
+        """The exclusion is about the missing signature, not about the word `jwt`."""
+        assert types_in("src/a.ts", f"const authToken = '{jwt()}';") == ["jwt"]
 
     def test_a_commit_digest_is_refused_by_its_identifier(self):
         assert sd.entropy_exclusion_reason("secret_hash", "a" * 39 + "b") == "digest_identifier"
