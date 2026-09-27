@@ -206,9 +206,10 @@ def test_the_workflow_is_read_only_by_default(workflow):
 
 
 def test_only_the_release_job_can_write_and_it_says_what_it_writes(workflow):
-    assert "permissions" not in workflow["jobs"]["gate"], (
-        "the gate job refuses releases; it needs nothing beyond the read-only default"
-    )
+    # The gate reads: the repository, and the Actions API for whether CI passed on this commit.
+    # `actions: read` has to be spelled out, because a `permissions` block makes every scope it
+    # does not name `none`, and a gate that 403s where it expects a conclusion fails the wrong way.
+    assert workflow["jobs"]["gate"]["permissions"] == {"contents": "read", "actions": "read"}
     assert workflow["jobs"]["release"]["permissions"] == {
         "contents": "write",
         "packages": "write",

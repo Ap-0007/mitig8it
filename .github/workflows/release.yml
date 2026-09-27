@@ -57,6 +57,12 @@ jobs:
   gate:
     name: Refuse a release that is not ready
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Asking whether CI has passed on this commit is a read of the Actions API, and a
+      # `permissions` block makes every scope it does not name `none`. Without this the gate would
+      # get a 403 where it expects a conclusion, which is the wrong way for a gate to fail.
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       major: ${{ steps.version.outputs.major }}
