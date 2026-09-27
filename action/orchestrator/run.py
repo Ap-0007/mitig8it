@@ -348,7 +348,13 @@ def render_finding_comment(finding: Dict[str, Any]) -> str:
     if evidence:
         lines.extend(["", evidence])
     remediation = str(finding.get("remediation") or "")
-    if remediation and not (description and _same_sentence(remediation, description)):
+    # The description is compared against the title and dropped when it repeats it, which left
+    # `description` empty and made the old check here vacuous: a remediation identical to the
+    # title survived on 40 of the trial's 65 comments. A field is dropped when it repeats
+    # anything the reader has already been shown, which is the title or a description that
+    # survived it.
+    already_said = [title] + ([description] if description else [])
+    if remediation and not any(_same_sentence(remediation, said) for said in already_said):
         lines.extend(["", f"Remediation: {remediation}"])
     return "\n".join(lines)
 
