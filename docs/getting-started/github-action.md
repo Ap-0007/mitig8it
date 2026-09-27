@@ -51,6 +51,17 @@ refusal is the point: a reviewer that could also rewrite the branch it is review
 asking for trust that an action installed in five lines has not earned. Fixes are GitHub
 suggestion blocks and become commits only when a reviewer clicks Commit suggestion.
 
+## Which version produced a review
+
+The check run summary opens with it and the last line of the review body repeats it:
+`Mitig8it v1.0.0 found 3 findings outside test code`. Quote that in a bug report. A ref that is not
+a release says so rather than naming a version it does not have, for example
+`unreleased (main, built from source)`.
+
+The App has no equivalent, and this is deliberate rather than an omission: it is deployed
+continuously and has no released version, so its review footer carries the run id instead, which is
+what identifies that one review. Details in [action/README.md](../../action/README.md).
+
 ## What leaves the runner
 
 Nothing, by default. The scanner, its rules, the repair engine and the publisher are all in the

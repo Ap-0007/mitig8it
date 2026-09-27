@@ -149,6 +149,37 @@ Verifying a JavaScript repair needs the Node the image pins, which is the one
 drifted apart every JavaScript verification refused to run and the only trace was one line in a
 job log.
 
+## Which version produced a review
+
+Every review names it, in two places: the check run summary opens with it, and the last line of the
+review body carries it.
+
+> Mitig8it v1.0.0 found 3 findings outside test code (1 critical, 2 high, 0 medium, 0 low).
+
+> <sub>Analyzed by **Mitig8it v1.0.0** running as a GitHub Action in this repository's own runner.
+> 3 findings reported. Quote that version in a bug report.</sub>
+
+On a ref that is not a release it says what it is instead of guessing: `unreleased (main, built from
+source)`, or `unreleased (local checkout, built from source)` for `uses: ./action`. A released ref
+whose image pull failed says `v1.0.0 (built from source, not the released image)`, because a review
+that came out of a local build must not be compared against the published bytes.
+
+The string is composed once, by `version_identity` in `orchestrator/run.py`, and rendered by the
+publisher. Neither place derives it independently, which is the same rule the finding totals follow
+and for the same reason: three renderers doing their own arithmetic is how one review came to report
+four different totals.
+
+The job summary carries the image digest as well. The review body does not, because a sixty-four
+character hex string in a pull request comment is noise to everyone who is not filing a bug.
+
+**The App reports no version, and this change does not give it one.** Its review footer carries the
+run id (`Analyzed by Mitig8it · Run a1b2c3d4 · ...`), which identifies that one review in its
+database and is the right thing to quote in a bug report against the App. There is no released App
+version to name: it is deployed continuously from `main` to Cloud Run, each deployment identified by
+a commit and a revision, and `"version": "1.0.0"` in `services/api-service/package.json` has never
+been bumped and is not surfaced anywhere. Printing it would be inventing a version, so the App keeps
+the run id.
+
 ## What the review looks like
 
 One review per run. The summary body and every new inline comment are submitted together as a
