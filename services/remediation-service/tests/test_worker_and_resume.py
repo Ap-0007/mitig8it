@@ -236,7 +236,10 @@ async def test_combining_candidates_keeps_the_lease_alive(monkeypatch, request_p
     request = RepairRequest.model_validate(request_payload)
     backend = HeartbeatCountingBackend(request)
 
-    def blocking_combine(req, snapshot, bundles):
+    def blocking_combine(req, snapshot, bundles, *, load_checks=True):
+        # `load_checks` is the engine's own keyword: an all-asserted batch combines without
+        # requiring the union, so the stub has to accept it the way the real function does.
+        assert load_checks is True
         time.sleep(0.25)
         return SimpleNamespace(patches=[])
 

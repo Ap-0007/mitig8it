@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 from typing import Any, Callable
 
@@ -31,9 +32,9 @@ from .templates import MODEL, TEMPLATE, TemplateFallback, combine_templates, gen
 from . import telemetry
 from .verification import VerificationResult, Verifier, create_rule_oracle
 from .verification.verifier import (
-    ALL_VERIFICATION_LEVELS,
     DEVELOPMENT_VERIFICATION_LEVEL,
     STATIC_ASSERTION_VERIFICATION_LEVEL,
+    VERIFICATION_LEVELS,
 )
 
 AgentFactory = Callable[[RepairRequest], RepairAgent]
@@ -183,9 +184,9 @@ def _level_permitted(level: str, policy: RepairPolicy) -> bool:
     """Whether policy accepts a candidate carrying this verification level.
 
     One function rather than a chain repeated per call site, because a level added to
-    `ALL_VERIFICATION_LEVELS` without a decision here would otherwise be silently accepted.
+    `VERIFICATION_LEVELS` without a decision here would otherwise be silently accepted.
     """
-    if level not in ALL_VERIFICATION_LEVELS:
+    if level not in VERIFICATION_LEVELS:
         return False
     if level == DEVELOPMENT_VERIFICATION_LEVEL:
         return policy.allow_development_verification
@@ -218,16 +219,26 @@ async def combine_and_verify(
     if len(entries) == 1:
         candidate, bundle, verification = entries[0]
         return CombinedVerification(bundle, candidate.verified_tree_oid, verification)
+    # A batch carries one kind of evidence, so either every entry here was asserted statically or
+    # none was; `repair` has already dropped the asserted ones when an executed candidate exists.
+    asserted_only = all(verification.verification_level == STATIC_ASSERTION_VERIFICATION_LEVEL for _, _, verification in entries)
     # Combining shells out for syntax and load checks and diffs every hunk pair, so it
     # runs off the loop: the worker's lease renewal shares this loop and a combine
-    # longer than the lease would otherwise lose the job mid-verification.
-    combined = await asyncio.to_thread(combine_patch_bundles, request, snapshot, [bundle for _, bundle, _ in entries])
+    # longer than the lease would otherwise lose the job mid-verification. An all-asserted batch
+    # combines without the load check, because requiring the union would execute repository code
+    # that no candidate in the batch claims was executed.
+    combined = await asyncio.to_thread(
+        functools.partial(combine_patch_bundles, load_checks=not asserted_only),
+        request,
+        snapshot,
+        [bundle for _, bundle, _ in entries],
+    )
     verified_tree_oid = compute_tree_oid(
         request.tree_entries,
         {patch.path: patch.replacement_content for patch in combined.patches},
     )
     claimed = {finding_id for candidate, _, _ in entries for finding_id in candidate.finding_ids}
-    if all(verification.verification_level == STATIC_ASSERTION_VERIFICATION_LEVEL for _, _, verification in entries):
+    if asserted_only:
         # Every candidate here was asserted rather than executed, so the union is asserted too:
         # a sandbox run over this tree would produce evidence no candidate in it claims. The
         # combined assertion re-checks every claimed finding against the union, so a patch that
@@ -721,9 +732,14 @@ class RepairEngine:
                 "result_bytes": 0,
             }
             try:
-                # No generated test: the bundle is the patch alone. Off the loop like every other
-                # bundle build, because it shells out to the syntax and load checks.
-                bundle = await asyncio.to_thread(build_patch_bundle, narrowed, snapshot, template.changes, None)
+                # No generated test: the bundle is the patch alone, and no load check, because
+                # clause 5 is that nothing was executed and a load check requires the patched
+                # module. Off the loop like every other bundle build, because it still shells out
+                # to the parse-only syntax check.
+                bundle = await asyncio.to_thread(
+                    functools.partial(build_patch_bundle, load_checks=False),
+                    narrowed, snapshot, template.changes, None,
+                )
             except PatchPolicyError as exc:
                 step["outcome"], step["reason"] = "rejected", str(exc.code)[:120]
                 report[finding_id] = f"rejected:{exc.code}"

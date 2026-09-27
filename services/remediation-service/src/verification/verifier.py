@@ -33,16 +33,19 @@ DEVELOPMENT_VERIFICATION_LEVEL = "development_unverified"
 # the level for a candidate where nothing executed at all, and the rule that flagged the line
 # was re-run over the file text instead. `contracts/repair-v1.md` states its five clauses.
 STATIC_ASSERTION_VERIFICATION_LEVEL = "static_assertion"
-# The levels a sandbox's own evidence may claim. A static assertion is deliberately absent: it
+# The levels a sandbox's own evidence may claim. The static assertion is deliberately absent: it
 # is produced by the verifier itself from a scanner answer, never reported by a driver, so a
 # broker that claims it is a broker claiming something it cannot have measured.
-VERIFICATION_LEVELS = {
+SANDBOX_VERIFICATION_LEVELS = {
     PRODUCTION_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,
     DEVELOPMENT_VERIFICATION_LEVEL,
 }
-# Every level a candidate may carry, which is the sandbox set plus the static assertion.
-ALL_VERIFICATION_LEVELS = VERIFICATION_LEVELS | {STATIC_ASSERTION_VERIFICATION_LEVEL}
+# Every level a candidate may carry. Membership here is what makes a level real: a family whose
+# repairs can only be asserted rather than executed asks `STATIC_ASSERTION_VERIFICATION_LEVEL in
+# VERIFICATION_LEVELS` before it lets a candidate through (`gates.static_assertion_level_available`),
+# and until the level was implemented that question answered false and the family was refused.
+VERIFICATION_LEVELS = SANDBOX_VERIFICATION_LEVELS | {STATIC_ASSERTION_VERIFICATION_LEVEL}
 # Weakest first. A caller that has to compare two levels orders them by this list rather than
 # by string, so adding a level never silently reorders anything.
 VERIFICATION_LEVEL_ORDER = (
@@ -441,7 +444,9 @@ class Verifier:
         if not isinstance(evidence, dict):
             raise BrokerEvidenceError("broker evidence is not an object")
         level = evidence.get("verification_level", PRODUCTION_VERIFICATION_LEVEL)
-        if level not in VERIFICATION_LEVELS:
+        # The sandbox set, not every level: a broker that reported `static_assertion` would be
+        # claiming a level no driver can measure, and that is rejected rather than trusted.
+        if level not in SANDBOX_VERIFICATION_LEVELS:
             raise BrokerEvidenceError("broker verification level is unrecognized")
         return str(level)
 

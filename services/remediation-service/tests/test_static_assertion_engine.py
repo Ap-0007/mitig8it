@@ -144,7 +144,11 @@ async def test_the_evidence_says_nothing_ran_and_which_rule_no_longer_matches(or
     # Clause 4, over the real rule set of both tiers: the patch started nothing new matching.
     assert RULE in record["match_sets"]["original"]["all"]
     assert RULE not in record["match_sets"]["patched"]["all"]
-    assert "nothing was executed" in " | ".join(response.evidence["limitations"])
+    limitations = " | ".join(response.evidence["limitations"])
+    assert "nothing was executed" in limitations
+    # And the one thing the ordinary build would have executed is named as not performed: the
+    # candidate module was never required, so nothing establishes that it still loads.
+    assert f"runtime load check not performed for {PATH}" in limitations
 
 
 @pytest.mark.asyncio

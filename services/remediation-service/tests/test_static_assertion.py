@@ -15,7 +15,7 @@ import pytest
 from src.families import STATIC_ASSERTION_FAMILIES, declares_static_assertion
 from src.git_tree import compute_tree_oid
 from src.models import GitTreeEntry, RepairRequest
-from src.patches import build_patch_bundle
+from src.patches import NO_LOAD_CHECK_LIMITATION, PatchPolicyError, build_patch_bundle
 from src.retrieval import Snapshot
 from src.verification import Verifier
 from src.verification.static_assertion import (
@@ -37,6 +37,7 @@ from src.verification.verifier import (
     DEVELOPMENT_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,
     PRODUCTION_VERIFICATION_LEVEL,
+    SANDBOX_VERIFICATION_LEVELS,
     STATIC_ASSERTION_NOT_PERMITTED,
     STATIC_ASSERTION_ORACLE_UNAVAILABLE,
     STATIC_ASSERTION_VERIFICATION_LEVEL,
@@ -156,9 +157,12 @@ def test_the_level_is_the_weakest_one_and_a_sandbox_may_not_claim_it():
         PRODUCTION_VERIFICATION_LEVEL,
     )
     assert VERIFICATION_LEVEL_ORDER.index(STATIC_ASSERTION_VERIFICATION_LEVEL) == 0
-    # Not in the set a driver's evidence may declare: this level is produced by the verifier from
-    # a scanner answer, so a sandbox claiming it would be claiming something it never measured.
-    assert STATIC_ASSERTION_VERIFICATION_LEVEL not in VERIFICATION_LEVELS
+    # A level a candidate may carry, which is what `VERIFICATION_LEVELS` means and what a family
+    # that can only be asserted asks before it lets a candidate through. Not in the set a driver's
+    # evidence may declare: this level is produced by the verifier from a scanner answer, so a
+    # sandbox claiming it would be claiming something it never measured.
+    assert STATIC_ASSERTION_VERIFICATION_LEVEL in VERIFICATION_LEVELS
+    assert STATIC_ASSERTION_VERIFICATION_LEVEL not in SANDBOX_VERIFICATION_LEVELS
 
 
 def test_the_policy_flag_defaults_to_true(request_payload):
@@ -380,6 +384,33 @@ async def test_the_evidence_names_every_clause_and_carries_a_digest(request_payl
     assert result.evidence_digest is not None
     assert result.evidence["static_assertion_reason"] == "execution_not_available:test"
     assert result.evidence["changed_lines"] == {"src/db.ts": [FINDING_LINE]}
+
+
+def test_clause_five_reaches_the_bundle_build_so_the_patched_module_is_never_required(request_payload):
+    """The bundle a statically asserted candidate is built from loads nothing.
+
+    The ordinary bundle build requires the patched module to check that it still loads, which runs
+    whatever that module runs on import. A candidate whose evidence says nothing was executed
+    cannot have been built that way, so the static assertion path asks for the build without it.
+    The check is recorded as not performed, because a reviewer is owed the fact that nobody has
+    established the patched module still loads.
+    """
+    path = "src/db.ts"
+    request = RepairRequest.model_validate(payload(request_payload))
+    snapshot = Snapshot(request)
+    original = snapshot.full_content(path).splitlines()
+    # Parses, and throws the moment it is required. Nothing else distinguishes the two builds.
+    change = {
+        "path": path,
+        "start_line": FINDING_LINE,
+        "original_lines": [original[FINDING_LINE - 1]],
+        "replacement_lines": [REPAIRED_LINE.rstrip("\n"), "const broken = null.missing;"],
+    }
+    with pytest.raises(PatchPolicyError) as error:
+        build_patch_bundle(request, snapshot, [change], None)
+    assert error.value.code == f"candidate_load_failed:{path}"
+    bundle = build_patch_bundle(request, snapshot, [change], None, load_checks=False)
+    assert NO_LOAD_CHECK_LIMITATION.format(path=path) in bundle.limitations
 
 
 @pytest.mark.asyncio

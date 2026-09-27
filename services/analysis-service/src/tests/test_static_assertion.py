@@ -170,7 +170,7 @@ def test_whole_file_patch_keeps_a_body_line_that_starts_with_a_diff_marker():
     assert [entry["line_number"] for entry in entries][:3] == [1, 2, 3]
 
 
-def test_the_scanner_is_run_with_the_network_switched_off(monkeypatch):
+def test_the_scanner_is_run_with_the_network_switched_off(monkeypatch, tmp_path):
     """Clause 5 claims nothing ran; the assertion also claims nothing was fetched."""
     import subprocess
 
@@ -184,7 +184,7 @@ def test_the_scanner_is_run_with_the_network_switched_off(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError):
-        opengrep_runner._run_semgrep("/tmp/nowhere")
+        opengrep_runner._run_semgrep(str(tmp_path / "nowhere"))
     assert "--metrics=off" in seen["argv"]
     assert "--disable-version-check" in seen["argv"]
 

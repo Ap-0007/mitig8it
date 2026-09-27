@@ -8,7 +8,7 @@ from .static_assertion import (
     create_rule_oracle,
 )
 from .verifier import (
-    ALL_VERIFICATION_LEVELS,
+    SANDBOX_VERIFICATION_LEVELS,
     STATIC_ASSERTION_VERIFICATION_LEVEL,
     VERIFICATION_LEVEL_ORDER,
     VERIFICATION_LEVELS,
@@ -17,11 +17,11 @@ from .verifier import (
 )
 
 __all__ = [
-    "ALL_VERIFICATION_LEVELS",
     "ASSERTION_SENTENCE",
     "NOTHING_EXECUTED",
     "RuleOracle",
     "RuleOracleError",
+    "SANDBOX_VERIFICATION_LEVELS",
     "STATIC_ASSERTION_VERIFICATION_LEVEL",
     "StaticAssertionResult",
     "VERIFICATION_LEVELS",
