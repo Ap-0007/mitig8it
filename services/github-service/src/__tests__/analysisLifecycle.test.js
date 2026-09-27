@@ -214,3 +214,35 @@ test('check retries update only this app check for the same head', async () => {
  expect(axios.mock.calls.some(([r])=>r.method==='patch' && r.url.endsWith('/check-runs/77'))).toBe(true);
  expect(axios.mock.calls.some(([r])=>r.method==='post')).toBe(false);
 });
+
+describe('the repair snapshot and workflow files', () => {
+  // nebullii/test-only#136: six workflow findings produced a job that failed its snapshot
+  // stage with "Finding source is unsupported or missing from the immutable tree", because
+  // the snapshot selected sources by suffix and no suffix covers a workflow. A `.yml`
+  // outside `.github/workflows/` stays out: it is ordinary YAML, not a repair target.
+  const isWorkflowPath = path => /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i.test(path);
+
+  test('a workflow file is a snapshot source and other yaml is not', () => {
+    for (const carried of [
+      '.github/workflows/release.yml',
+      '.github/workflows/nightly.yaml',
+      'packages/app/.github/workflows/ci.yml',
+    ]) expect(isWorkflowPath(carried)).toBe(true);
+    for (const excluded of [
+      'docker-compose.yml',
+      '.github/dependabot.yml',
+      'k8s/deploy.yml',
+      'config/workflows/pipeline.yml',
+      '.github/workflows/nested/deep.yml',
+    ]) expect(isWorkflowPath(excluded)).toBe(false);
+  });
+
+  test('the shipped filter carries a workflow', () => {
+    const source = require('fs').readFileSync(
+      require('path').join(__dirname, '../services/githubInternalOperations.js'), 'utf8');
+    expect(source).toContain('isWorkflowPath(entry.path)');
+    const declared = source.match(/const isWorkflowPath = path => (\/.*\/i)\.test\(path\)/);
+    expect(declared).not.toBeNull();
+    expect(declared[1]).toBe(String(isWorkflowPath.toString().match(/(\/.*\/i)\.test/)[1]));
+  });
+});
