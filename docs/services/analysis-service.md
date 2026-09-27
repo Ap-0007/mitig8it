@@ -95,6 +95,9 @@ Analysis requests and metrics require `x-internal-secret`. The expected value is
 - `OPENGREP_BATCH_MAX_FILES` / `OPENGREP_BATCH_MAX_BYTES` batch bounds for tier 2
 - `TIER1_BUDGET_SECONDS` total tier 1 wall clock, default 20
 - `TIER1_FILE_BUDGET_SECONDS` per-file tier 1 wall clock, default 2
+- `WORKFLOW_ACTION_DIGEST_LOOKUP` off unless set: allows one GitHub API request per distinct action
+  reference, to resolve the commit digest the pinning repair needs
+- `WORKFLOW_ACTION_DIGEST_LOOKUP_TOKEN` optional bearer token for that lookup
 
 For the full env contract, see [environment.md](../getting-started/environment.md).
 
@@ -102,7 +105,8 @@ For the full env contract, see [environment.md](../getting-started/environment.m
 
 The AST rules live in `src/opengrep_rules/*.yml`. JavaScript, TypeScript and Python are covered
 by 116 rules: 25 that predate the coverage work, and 91 in `javascript_coverage.yml` and
-`python_coverage.yml`.
+`python_coverage.yml`. Templates add 9 more in `template_coverage.yml`, and GitHub Actions
+workflows add 9 in `workflow_coverage.yml`.
 
 ### Where the rules come from
 
@@ -152,7 +156,12 @@ object in `security_rules.py` (`precision`, `posting`, `precision_evidence`), an
 `main.QUARANTINED_RULE_IDS` is the union of the two declarations, so a suppression, a metric
 or a reviewer never has to ask which tier a rule came from.
 
-Five rules are quarantined today: four tier 2 rules, whose measurement is in
+Seven rules are quarantined today. Two are the workflow rules
+`cwe-732.gha-write-permission-under-privileged-trigger`, whose measured precision is 0.00 over ten
+hand-read findings, and `cwe-668.gha-self-hosted-runner-fork-trigger`, whose claim holds only if
+the repository is public; both are in
+[workflow-tampering-2026-09.md](../validation/workflow-tampering-2026-09.md). The other five: four
+tier 2 rules, whose measurement is in
 [tier2-coverage-2026-09.md](../validation/tier2-coverage-2026-09.md), and the tier 1 rule
 `path.traversal.user_path`, whose measurement is in
 [vulnerable-corpus-2026-09.md](../validation/vulnerable-corpus-2026-09.md). The same corpus
@@ -173,6 +182,67 @@ quarantined rule's findings, and `scripts/replay/score.py` reports them separate
 posts. Three adjudicated findings at 0.8 or better is the bar, and it is a real bar:
 `cwe-489.py-debug-constant-true` has two, both confirming the quarantine reason was wrong,
 and it still cannot come back.
+
+### Workflow tampering, and how it is scoped
+
+`workflow_coverage.yml` holds nine rules for GitHub Actions workflows: an untrusted checkout under
+`pull_request_target` or `workflow_run`, a build or test step under `pull_request_target`, an
+interpolation of attacker-controlled event data inside a `run:` script, a third-party action
+referenced by tag or branch rather than a commit digest, `permissions: write-all`, a write scope
+under a privileged trigger, `persist-credentials: true` on an untrusted checkout, a repository
+secret handed to a job that has checked out untrusted code, and a self-hosted runner in a workflow
+a fork can trigger. Seven post and two are quarantined; the measurement is in
+[workflow-tampering-2026-09.md](../validation/workflow-tampering-2026-09.md).
+
+This is the first category whose scope is a **path** rather than an extension, and the reason is
+worth stating because it is the whole of the design.
+
+`.yml` is the most common configuration extension there is. A repository's Kubernetes manifests,
+its Helm values, its `docker-compose.yml`, another provider's CI config and its own `.mitig8it.yml`
+are all YAML, and `run:`, `ref:` and `permissions:` mean something different in every one of them.
+Admitting `.yml` to `SUPPORTED_EXTENSIONS` would have put nine rules over all of that, and would
+also have made the product fetch the content of every YAML file in every pull request in order to
+find the handful that are workflows.
+
+So the gate is `is_tier2_scannable_path` in `src/test_code_scope.py`: a source extension, a
+template extension, or `.yml`/`.yaml` under a `.github/workflows/` path segment. `WORKFLOW_EXTENSIONS`
+is deliberately disjoint from `SUPPORTED_EXTENSIONS`, and `tests/test_supported_extension_parity.py`
+asserts that it stays that way.
+
+The scope is written down four times, because four runtimes need it and none can import the others:
+here, in `prAnalysisOrchestrator.js`, in `scripts/replay/prodfilters.py`, and in
+`action/orchestrator/pr_scope.py`. The parity test compares all four on the literals and on the
+behaviour, over a workflow, ordinary YAML, and a directory that merely ends in `github/workflows`.
+Two dependencies that used to be invisible are asserted there too: the github-service's
+changed-file filter has no extension list, only a status filter and two path exclusions, and a
+workflow survives all three; and `scripts/replay/corpus.py` used to skip every dotted directory,
+which would have made a snapshot report zero workflow findings however many a tree contained.
+
+The rules are then scoped a second time, independently. They are `generic` rules, and a `generic`
+rule with no `paths: include` reads every file in the batch, so each one includes exactly
+`.github/workflows/*.yml` and `.github/workflows/*.yaml`.
+`tests/test_workflow_rules_are_path_scoped.py` asserts the includes and then runs the whole file
+through the real scanner over a document that carries every shape, at a workflow path and at two
+ordinary YAML paths, because a metadata assertion would not catch a scanner whose glob semantics
+changed.
+
+Most of the patterns are a single `pattern-regex`, which is unusual here and deliberate. What these
+rules express is a relation between a trigger at the top of the document and a step forty lines
+below it, and a YAML pattern cannot state "this key is in the same document as that key". Each
+pattern names the trigger, skips forward, and uses PCRE's `\K` to move the reported match onto the
+step, so the finding lands on the line a reviewer has to change rather than on the `on:` block.
+`pattern-inside: "run: ..."` was tried and is recorded at the top of the rule file as the wrong
+tool: in `generic` mode `...` has no notion of a YAML block, so it ran past a single-line
+`- run: npm i` into the next step's `if:` line and produced ten false findings.
+
+One finding carries a fact the repair side cannot get for itself. The pinning repair needs the
+commit an action's tag currently resolves to, and the repair sandbox has no egress by design, so
+`src/workflow_action_digest.py` resolves it here and puts it on the finding as
+`evidence_details.extra.resolved_action_digest`. The lookup is off unless
+`WORKFLOW_ACTION_DIGEST_LOOKUP` is set, because a scanner that quietly makes an outbound request
+per finding is one nobody can reason about and the Action's contract is that nothing leaves the
+runner. Every failure -- unreachable API, rate limit, deleted tag -- produces no digest rather than
+a guess, and the repair service refuses that case by name.
 
 ### Rule ids are resolved, not taken as given
 

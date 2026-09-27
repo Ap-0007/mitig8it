@@ -19,6 +19,10 @@ import yaml
 from opengrep_runner import RULES_DIR, SUPPORTED_EXTENSIONS, TEMPLATE_EXTENSIONS
 
 TEMPLATE_RULES_FILE = "template_coverage.yml"
+# The other generic file. Its rules are scoped by directory rather than by extension, so the
+# include assertions here do not apply to them; tests/test_workflow_rules_are_path_scoped.py
+# asserts the directory form instead.
+WORKFLOW_RULES_FILE = "workflow_coverage.yml"
 
 
 def _all_rules() -> list[tuple[str, dict]]:
@@ -34,6 +38,11 @@ GENERIC_RULES = [
     (name, rule) for name, rule in ALL_RULES if "generic" in (rule.get("languages") or [])
 ]
 TEMPLATE_RULES = [rule for name, rule in ALL_RULES if name == TEMPLATE_RULES_FILE]
+# Generic rules whose include is expected to be a bare extension glob: every generic rule
+# except the workflow ones, which name a directory because ordinary YAML is not a workflow.
+EXTENSION_SCOPED_GENERIC_RULES = [
+    (name, rule) for name, rule in GENERIC_RULES if name != WORKFLOW_RULES_FILE
+]
 
 
 class TestEveryGenericRuleIsScoped:
@@ -52,7 +61,9 @@ class TestEveryGenericRuleIsScoped:
         )
 
     @pytest.mark.parametrize(
-        "rule", [rule for _, rule in GENERIC_RULES], ids=[rule["id"] for _, rule in GENERIC_RULES]
+        "rule",
+        [rule for _, rule in EXTENSION_SCOPED_GENERIC_RULES],
+        ids=[rule["id"] for _, rule in EXTENSION_SCOPED_GENERIC_RULES],
     )
     def test_every_included_glob_is_an_extension_the_service_scans(self, rule):
         """An include for an extension tier 2 never fetches is a rule that cannot fire.

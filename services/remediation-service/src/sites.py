@@ -1387,3 +1387,99 @@ def enclosing_site(snapshot: Snapshot, finding: FindingSnapshot, language: str) 
     if language == "python":
         return python_site_for_line(source, line)
     return js_site_for_line(source, line)
+
+
+# --- GitHub Actions workflows ---------------------------------------------------------------
+#
+# The site model here is a *step*, not a function. A workflow is a document GitHub interprets,
+# so there is no scope to resolve and nothing to walk: what a patch needs to know is where the
+# step the finding landed in begins and ends, what its key indentation is, and whether it
+# already has an `env:` block. All three are decided by YAML's indentation, which is why this is
+# a line scan rather than a parse.
+#
+# It is deliberately not a YAML parse. A parse would give back a document with the comments and
+# the exact whitespace gone, and both matter: a patch that reflows a workflow is a patch a
+# maintainer will not read, and the pinning fix puts the version *into* a comment.
+
+# A step begins with a `-` list item under `steps:`.
+_STEP_ITEM_RE = re.compile(r"^(?P<indent>[ \t]*)-(?P<gap>[ \t]+)(?P<rest>\S.*)$")
+# A mapping key at some indentation: `run:`, `env:`, `with:`, `uses:`.
+_YAML_KEY_RE = re.compile(r"^(?P<indent>[ \t]*)(?P<key>[A-Za-z_][\w.-]*)[ \t]*:(?P<rest>.*)$")
+
+
+@dataclass(frozen=True)
+class WorkflowStep:
+    """One step of one job, as a span of lines plus the two things a patch has to line up with.
+
+    `key_indent` is the column the step's own keys sit at, which is the `-` column plus the gap
+    after it for the first key and the same for every sibling. `env_line` is the 1-based line of
+    an existing `env:` key in the step, or None, which is what decides whether the environment
+    binding patch inserts a block or extends one.
+    """
+
+    start_line: int
+    end_line: int
+    key_indent: int
+    env_line: int | None
+    env_indent: int | None
+
+    @property
+    def names(self) -> set[str]:
+        return set()
+
+
+def _leading_width(text: str) -> int:
+    return len(text) - len(text.lstrip(" \t"))
+
+
+def workflow_step_for_line(source: str, line: int) -> WorkflowStep:
+    """The step that contains `line`, by indentation.
+
+    A step runs from its `-` item to the line before the next item at the same indentation, or
+    to the first line indented less than its keys, whichever comes first. A blank line belongs
+    to whatever surrounds it.
+    """
+    lines = source.split("\n")
+    if line < 1 or line > len(lines):
+        raise SiteError("workflow_line_out_of_range")
+
+    start_index: int | None = None
+    key_indent = 0
+    for index in range(line - 1, -1, -1):
+        match = _STEP_ITEM_RE.match(lines[index])
+        if match:
+            start_index = index
+            key_indent = len(match.group("indent")) + 1 + len(match.group("gap"))
+            break
+    if start_index is None:
+        raise SiteError("workflow_step_not_found")
+
+    item_indent = _leading_width(lines[start_index])
+    end_index = len(lines) - 1
+    for index in range(start_index + 1, len(lines)):
+        text = lines[index]
+        if not text.strip():
+            continue
+        indent = _leading_width(text)
+        if indent < key_indent or _STEP_ITEM_RE.match(text) and indent <= item_indent:
+            end_index = index - 1
+            break
+    else:
+        end_index = len(lines) - 1
+
+    if not start_index <= line - 1 <= end_index:
+        raise SiteError("workflow_step_not_found")
+
+    env_line: int | None = None
+    env_indent: int | None = None
+    for index in range(start_index, end_index + 1):
+        # `- env:` on the item line itself counts, and so does a sibling `env:` at key_indent.
+        # Anything deeper is a key of some other block, such as a `with:` entry called `env`.
+        text = lines[index].replace("-", " ", 1) if index == start_index else lines[index]
+        candidate = _YAML_KEY_RE.match(text)
+        if candidate and candidate.group("key") == "env" and len(candidate.group("indent")) == key_indent:
+            env_line = index + 1
+            env_indent = key_indent
+            break
+
+    return WorkflowStep(start_index + 1, end_index + 1, key_indent, env_line, env_indent)

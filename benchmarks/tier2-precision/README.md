@@ -37,9 +37,10 @@ Each case is one file's worth of code and what must happen to it.
 | `rules` | No-finding cases: the rules that must all stay silent. |
 | `path` | The path the fixture is scanned at; the extension picks the language. |
 | `code` | The fixture source. |
-| `note` | No-finding cases: what was measured and what the narrowing was. |
+| `note` | No-finding cases: what was measured and what the narrowing was. Also carried by the `posted` cases, where it says why the reconciliation goes the way it does. |
+| `posted` | Optional: the findings that must reach a reviewer, in order, each naming its `rule` and the `merged_rule_ids` it must carry, or `null` for a finding that fires on its own. |
 
-Three tests run over it:
+Four tests run over it:
 
 1. **Every case names a rule that exists.** A renamed rule leaves a case behind that asserts
    nothing; this catches it.
@@ -49,6 +50,12 @@ Three tests run over it:
    is deliberate: a quarantined rule is expected to be re-enabled, and the fixture is what
    the re-enabling is measured against.
 3. **Every no-finding line stays silent.**
+4. **Every `posted` case receives exactly the comments it names.** The other three stop at the
+   scanner, which is the wrong altitude for two rules that describe one weakness: both are right
+   about the step and the question is how many comments it draws. These cases replay the
+   production order, posting policy then clustering, and assert the survivors and the rule ids
+   they carry. They also assert that nothing the scanner found was dropped without a survivor
+   naming it.
 
 The pre-existing rules in `javascript.yml` and `python.yml` are out of scope. They were in
 the tree before the coverage set; their measurement is the replay, recorded in

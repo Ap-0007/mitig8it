@@ -22,6 +22,9 @@ from .families import (
     PATH_CONTAINMENT,
     PYTHON,
     SQL_PARAMETERIZATION,
+    WORKFLOW,
+    WORKFLOW_HARDENING,
+    is_workflow_path,
 )
 from .gates import PYTHON_SQL_DRIVERS, python_imports
 from .models import FindingSnapshot
@@ -49,6 +52,8 @@ from .sites import (
     python_site_for_line,
     python_import_anchor,
     python_module_assignment,
+    WorkflowStep,
+    workflow_step_for_line,
 )
 
 TEMPLATE = "template"
@@ -1063,12 +1068,195 @@ def _py_traversal(snapshot: Snapshot, finding: FindingSnapshot, function: PyFunc
     return TemplatePatch(finding.stable_id, PATH_CONTAINMENT, changes, f"os.path.realpath with a containment check that {tail_text} before any file access")
 
 
+# --- GitHub Actions workflows ---------------------------------------------------------------
+#
+# Two shapes, and only two, because only two are unambiguous.
+#
+# Everything else the workflow rules find is a design decision rather than an edit. Moving a
+# build out of `pull_request_target` changes which revision CI runs; dropping a write scope
+# changes what the job can do; replacing a self-hosted runner changes where it runs. A patch
+# cannot make those choices for a maintainer, so those findings carry the explanation and no
+# candidate.
+
+# `uses: owner/repo@ref`, with the leading list dash and surrounding quotes optional, and any
+# trailing comment kept so a version note survives the rewrite.
+_ACTION_USES_RE = re.compile(
+    r"^(?P<prefix>[ \t]*(?:-[ \t]+)?uses[ \t]*:[ \t]*)"
+    r"(?P<quote>['\"]?)(?P<repo>[^\s'\"@]+)@(?P<ref>[^\s'\"#]+)(?P=quote)"
+    r"(?P<tail>[ \t]*(?:#.*)?)$"
+)
+_FULL_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+# The interpolations the workflow injection rule reports, as they appear in a script.
+_GHA_EXPRESSION_RE = re.compile(r"\$\{\{(?P<body>[^}]*?)\}\}")
+_GHA_FIELD_RE = re.compile(r"(?:github|inputs|needs|steps|env|vars|matrix)(?:\.[\w-]+|\[[^\]]*\])+")
+
+ACTION_DIGEST_UNRESOLVED = "action_digest_unresolved"
+WORKFLOW_NOT_A_WORKFLOW = "not_a_workflow_path"
+
+
+def _finding_extra(finding: FindingSnapshot) -> dict[str, Any]:
+    """`evidence_details.extra` off a finding, which allows extra fields, or an empty mapping."""
+    details = getattr(finding, "evidence_details", None) or {}
+    if not isinstance(details, dict):
+        return {}
+    extra = details.get("extra")
+    return extra if isinstance(extra, dict) else {}
+
+
+def environment_variable_name(expression: str) -> str:
+    """A shell-safe environment variable name for one `${{ ... }}` body.
+
+    Derived from the expression's own field path so the name says where the value came from:
+    `github.event.pull_request.title` becomes `PR_TITLE` and `github.event.comment.body` becomes
+    `COMMENT_BODY`. It is deterministic, because the patch that writes it and the reviewer who
+    reads it both have to agree on it.
+    """
+    field = _GHA_FIELD_RE.search(expression or "")
+    path = (field.group(0) if field else (expression or "")).strip()
+    parts = [part for part in re.split(r"[^\w]+", path) if part]
+    # `github` and `event` carry no meaning in a variable name, and neither does an index.
+    meaningful = [part for part in parts if part.lower() not in {"github", "event"} and not part.isdigit()]
+    tail = meaningful[-2:] if len(meaningful) >= 2 else meaningful
+    if tail[:1] == ["pull_request"]:
+        tail = ["pr"] + tail[1:]
+    name = re.sub(r"[^A-Z0-9_]", "_", "_".join(tail).upper()).strip("_")
+    if not name or name[0].isdigit():
+        name = f"GHA_{name}" if name else "UNTRUSTED_INPUT"
+    return name
+
+
+def _workflow_pin_action(snapshot: Snapshot, finding: FindingSnapshot) -> TemplatePatch:
+    """Replace `uses: owner/repo@v3` with the digest that ref resolves to, keeping the tag as a note.
+
+    The digest is not resolved here. It is resolved at analysis time, where the product still has
+    the network, and carried on the finding as `resolved_action_digest`: the repair sandbox has no
+    egress by design, so a template that reached for the GitHub API would either fail or prove the
+    sandbox does not hold.
+    """
+    path = finding.affected_path
+    line = _finding_line(finding)
+    lines = snapshot.full_content(path).split("\n")
+    if line > len(lines):
+        raise TemplateError("workflow_line_out_of_range")
+    original = lines[line - 1]
+    match = _ACTION_USES_RE.match(original)
+    if not match:
+        raise TemplateError("action_reference_not_found")
+    if _FULL_DIGEST_RE.match(match.group("ref")):
+        raise TemplateError("action_already_pinned")
+
+    digest = str(_finding_extra(finding).get("resolved_action_digest") or "").strip()
+    if not _FULL_DIGEST_RE.match(digest):
+        # Refused, not guessed. Writing a digest nobody resolved would change which code runs.
+        raise TemplateError(ACTION_DIGEST_UNRESOLVED)
+
+    ref = match.group("ref")
+    existing_comment = (match.group("tail") or "").strip()
+    if existing_comment.startswith("#"):
+        note = existing_comment if ref in existing_comment else f"{existing_comment} ({ref})"
+    else:
+        note = f"# {ref}"
+    quote = match.group("quote")
+    replacement = f"{match.group('prefix')}{quote}{match.group('repo')}@{digest.lower()}{quote} {note}"
+    return TemplatePatch(
+        finding.stable_id,
+        WORKFLOW_HARDENING,
+        [_hunk(path, finding.stable_id, line, [original], [replacement])],
+        f"{match.group('repo')} pinned to the commit {ref} resolves to, with {ref} kept as a comment",
+    )
+
+
+def _workflow_env_binding(snapshot: Snapshot, finding: FindingSnapshot, step: WorkflowStep) -> TemplatePatch:
+    """Move every attacker-controlled `${{ ... }}` out of a `run:` script into the step's `env:`.
+
+    The script then reads `"$VAR"`, which the shell expands as one word and never re-parses, and
+    the expression is evaluated by Actions into an environment value that no shell ever sees as
+    source. This is the fix GitHub itself documents, and it is the one the rule was written to go
+    quiet on, which is what lets the static assertion level prove it.
+    """
+    path = finding.affected_path
+    line = _finding_line(finding)
+    lines = snapshot.full_content(path).split("\n")
+    if line > len(lines):
+        raise TemplateError("workflow_line_out_of_range")
+    original = lines[line - 1]
+
+    bindings: list[tuple[str, str]] = []
+    claimed: dict[str, str] = {}
+
+    def substitute(match: re.Match[str]) -> str:
+        body = match.group("body").strip()
+        name = environment_variable_name(body)
+        # Two different expressions that derive the same name would collide, so the second gets a
+        # suffix rather than silently taking the first one's value.
+        if claimed.get(name, body) != body:
+            index = 2
+            while claimed.get(f"{name}_{index}", body) != body:
+                index += 1
+            name = f"{name}_{index}"
+        claimed[name] = body
+        if all(existing != name for existing, _ in bindings):
+            bindings.append((name, body))
+        return f'"${name}"'
+
+    rewritten = _GHA_EXPRESSION_RE.sub(substitute, original)
+    if not bindings:
+        raise TemplateError("no_interpolation_at_finding")
+    # `echo "${{ x }}"` would become `echo ""$X""`: the quotes the author already wrote around the
+    # interpolation are now redundant, so they are collapsed rather than doubled.
+    rewritten = re.sub(r'"(")(\$[A-Z0-9_]+)"(")', r'"\2"', rewritten)
+
+    changes = [_hunk(path, finding.stable_id, line, [original], [rewritten])]
+
+    pad = " " * step.key_indent
+    entries = [f"{pad}  {name}: ${{{{ {body} }}}}" for name, body in bindings]
+    if step.env_line is not None:
+        anchor = lines[step.env_line - 1]
+        changes.insert(0, _hunk(path, finding.stable_id, step.env_line, [anchor], [anchor, *entries]))
+    else:
+        # A new block, anchored on the step's first line so it reads before the script that uses
+        # it and the hunk stays one line wide.
+        anchor = lines[step.start_line - 1]
+        changes.insert(
+            0,
+            _hunk(path, finding.stable_id, step.start_line, [anchor], [anchor, f"{pad}env:", *entries]),
+        )
+
+    names = ", ".join(name for name, _ in bindings)
+    return TemplatePatch(
+        finding.stable_id,
+        WORKFLOW_HARDENING,
+        changes,
+        f"the interpolated event data bound to {names} in the step's env block and read as a quoted shell variable",
+    )
+
+
+def _workflow(snapshot: Snapshot, finding: FindingSnapshot) -> TemplatePatch:
+    """Dispatch on which of the two repairable shapes this finding is."""
+    path = finding.affected_path
+    if not is_workflow_path(path):
+        raise TemplateError(WORKFLOW_NOT_A_WORKFLOW)
+    rule = str(finding.rule_id or "").lower()
+    internal_type = str(getattr(finding, "internal_type", "") or "").lower()
+    if "unpinned-action" in rule or internal_type == "unpinned_action_reference":
+        return _workflow_pin_action(snapshot, finding)
+    if "run-untrusted-interpolation" in rule or internal_type == "workflow_script_injection":
+        step = workflow_step_for_line(snapshot.full_content(path), _finding_line(finding))
+        return _workflow_env_binding(snapshot, finding, step)
+    # Every other workflow finding is a design decision, not an edit.
+    raise TemplateError("workflow_shape_not_templated")
+
+
 # --- entry points ---------------------------------------------------------------------------
 
 def generate_template(snapshot: Snapshot, finding: FindingSnapshot, family: str, language: str) -> TemplatePatch | TemplateFallback:
     """The deterministic hunks for one finding, or the reason the model has to write them."""
     path = finding.affected_path
     try:
+        if language == WORKFLOW:
+            # A workflow has no enclosing scope to resolve, so it is answered before the
+            # language branches that look for one.
+            return _workflow(snapshot, finding)
         if language == JAVASCRIPT:
             # A secret literal is not inside any function, and neither is a parser a route
             # calls, so both are recognized before the enclosing-scope lookup.
