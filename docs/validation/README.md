@@ -11,6 +11,7 @@ produced it. Nothing in this directory is an estimate.
 | [workflow-tampering-2026-09.md](workflow-tampering-2026-09.md) | The nine GitHub Actions workflow rules over 240 workflow files from 27 repositories, per rule, with the two that are quarantined and what was read to quarantine them. |
 | [action-trial-2026-09.md](action-trial-2026-09.md) | The GitHub Action installed on private copies of ten real repositories and read as their maintainer would read it. |
 | [pairs-2026-09.md](pairs-2026-09.md) | Why a repair pair that exists does not verify: each complete pair's proof run against the original tree and the patched tree, what the two outcomes said, and what installing the repository's own dependencies changed. |
+| [static-assertion-2026-09.md](static-assertion-2026-09.md) | What the static assertion reaches on that same corpus: how many findings with a patch and no proof the level carries, how many it refuses and on which clause, and what an assertion is and is not worth. |
 
 Two more documents belong to the same record without being measurements:
 [../legal/third-party-rules.md](../legal/third-party-rules.md) is why every rule in the tree is
@@ -37,19 +38,19 @@ replay.
 
 ## Reference output
 
-This is `make bench` on the integration branch, run on 25 September 2026, macOS on Apple silicon,
+This is `make bench` on the integration branch, run on 27 September 2026, macOS on Apple silicon,
 Python 3.11.6, Node 24.1.0. A run on your machine should print the same counts and rates; the
 per-suite banner lines are omitted here.
 
 ```text
-make bench, 2026-09-25
+make bench, 2026-09-27
 
 Benchmark                         Cases  Pass  Fail  Pass rate  Precision  Coverage  Abstention  Note
---------------------------------  -----  ----  ----  ---------  ---------  --------  ----------  -----------------------------
-tier 1 precision gate             88     88    0     1.00       -          -         -           from 38 adjudicated findings
+--------------------------------  -----  ----  ----  ---------  ---------  --------  ----------  ---------------------------------------------------
+tier 1 precision gate             91     91    0     1.00       -          -         -           from 39 adjudicated findings
 tier 2 precision gate             140    140   0     1.00       -          -         -           from 138 adjudicated findings
-remediation corpus, reference     59     59    0     1.00       1.00       1.00      1.00        46 verified, 13 abstained
-remediation corpus, engine-local  59     59    0     1.00       1.00       1.00      1.00        46 verified, 13 abstained
+remediation corpus, reference     63     63    0     1.00       1.00       1.00      1.00        51 verified, 12 abstained
+remediation corpus, engine-local  63     63    0     1.00       1.00       1.00      1.00        51 verified (46 executed, 5 asserted), 12 abstained
 
 Precision, coverage and abstention are the remediation corpus's own definitions:
   precision   independently correct repairs / repairs the engine verified
@@ -72,13 +73,15 @@ was judged wrong and still find what was judged right. A rule change that breaks
 fails here. The measured precision of the rules themselves is the 0.67 to 0.97 range in the corpus
 document, not this column.
 
-The remediation corpus rows are 59 authored fixtures against a release manifest that asks for 120
+The remediation corpus rows are 63 authored fixtures against a release manifest that asks for 120
 externally reviewed cases. The reference adapter replays the checked-in repair, so its 1.00 says
 the fixtures and the grader agree with each other. The engine-local adapter runs the real pipeline
 against a scripted provider replaying that fixture's reviewed repair, so its 1.00 says the pipeline
-carries a finding from intake to a verified candidate. Neither measures a model, and 59 authored
-cases cannot establish a rate. Both adapters verify in the local subprocess sandbox, so every
-candidate is `development_unverified`.
+carries a finding from intake to a verified candidate. Neither measures a model, and 63 authored
+cases cannot establish a rate. The note splits the 51 verified repairs by how they were verified,
+because 46 of them ran a regression test in the local subprocess sandbox and are therefore
+`development_unverified`, and 5 executed nothing at all and are `static_assertion`. Adding the two
+into one number would hide the difference the second column exists to show.
 
 The two numbers that do measure the product on code it had not seen are in the corpus and action
 trial documents: precision 0.67 to 0.97 depending on which rules post, recall 0.40 to 0.58, and

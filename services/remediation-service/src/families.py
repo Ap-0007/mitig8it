@@ -195,6 +195,19 @@ def family_verification(family: str | None) -> str | None:
     return FAMILY_VERIFICATION.get(family or "")
 
 
+def declares_static_assertion(family: str | None) -> bool:
+    """Whether this family's repairs are asserted statically by declaration.
+
+    One of the two routes to the `static_assertion` level, and the declared one: this is for a
+    family whose repair no regression test could demonstrate even in principle, which today is
+    `workflow_hardening`. `FAMILY_VERIFICATION` above is the declaration; the other route is a
+    family that *can* be executed, for a finding whose execution was refused for a reason the
+    evidence records. A family must never be declared here when a proof can drive its repair,
+    because that would trade an executed proof for a weaker one.
+    """
+    return family_verification(family) == STATIC_ASSERTION
+
+
 def family_assertion(family: str | None, language: str | None) -> str | None:
     """The harness assertion a regression test for this family must make.
 

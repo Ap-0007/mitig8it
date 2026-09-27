@@ -5,7 +5,7 @@
 const pipeline = [
   { node: 'Detect', label: 'Rules, AST scan, model triage' },
   { node: 'Generate', label: 'Template first, model when needed' },
-  { node: 'Prove', label: 'Regression test in a sandbox' },
+  { node: 'Prove', label: 'Regression test in a sandbox, or a static assertion' },
   { node: 'Publish', label: 'Suggestion block under the finding' },
   { node: 'You apply', label: 'Commit it, merge stays yours' },
 ]

@@ -132,6 +132,12 @@ export default function SecurityPage() {
               Verification runs in a development-grade local sandbox, without kernel isolation. Each
               fix says so in its Details.
             </p>
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-neutral-400">
+              Some fixes carry a weaker claim, and say which. At the static assertion level nothing
+              was executed: the rule that flagged the line no longer matches the patched file, no
+              other rule started matching it, and nothing else in the file changed. That is less
+              than a test result and the fix is labelled accordingly.
+            </p>
           </div>
         </section>
 

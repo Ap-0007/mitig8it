@@ -78,8 +78,14 @@ def corpus_row(name: str, report: Path) -> list[str]:
     total = summary["total_cases"]
     failures = len(summary["failures"])
     unexpected = len(summary["unexpected_failures"])
+    # A case verified by execution and one verified by a static assertion are not the same
+    # result, so the note says how many of each rather than one "verified" count.
+    asserted = len((summary.get("passed_by_verification_level") or {}).get("static_assertion") or [])
+    verified = f"{summary['verified_repairs']} verified"
+    if asserted:
+        verified = f"{summary['verified_repairs']} verified ({summary['verified_repairs'] - asserted} executed, {asserted} asserted)"
     note = (
-        f"{summary['verified_repairs']} verified, {summary['abstentions']} abstained"
+        f"{verified}, {summary['abstentions']} abstained"
         if not unexpected
         else f"{unexpected} unexpected failures"
     )

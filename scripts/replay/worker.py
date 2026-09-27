@@ -201,7 +201,18 @@ def load_pair_modules() -> dict[str, Any]:
     from src.retrieval import Snapshot, SnapshotError  # noqa: PLC0415
     from src.templates import TemplateFallback, generate_template  # noqa: PLC0415
 
+    try:
+        # The static assertion level, and the rule oracle it is decided from. Absent on a branch
+        # that does not carry the level, and then the measurement reports zero assertions rather
+        # than failing: the "before" side of this comparison is exactly that branch.
+        from src.engine import static_assertion_reason  # noqa: PLC0415
+        from src.verification import create_rule_oracle  # noqa: PLC0415
+    except ImportError:
+        static_assertion_reason, create_rule_oracle = None, None
+
     modules.update({
+        "static_assertion_reason": static_assertion_reason,
+        "create_rule_oracle": create_rule_oracle,
         "Snapshot": Snapshot,
         "SnapshotError": SnapshotError,
         "GeneratedProof": GeneratedProof,
@@ -555,6 +566,39 @@ def _measure_pair(modules: dict[str, Any], request: Any, snapshot: Any, template
     }
 
 
+def _measure_static_assertion(
+    modules: dict[str, Any], request: Any, snapshot: Any, template: Any, reason: str, oracle: Any
+) -> dict[str, Any]:
+    """Runs one finding's template patch through the static assertion. Nothing is executed.
+
+    The engine's own last pass, narrowed to one finding: the same bundle builder with the load
+    check off, the same verifier, the same five clauses. No proof and no sandbox, because the
+    finding reached here precisely because execution was unavailable to it.
+    """
+    import asyncio  # noqa: PLC0415
+
+    try:
+        bundle = modules["build_patch_bundle"](request, snapshot, template.changes, None, load_checks=False)
+    except modules["PatchPolicyError"] as exc:
+        return {"asserted": False, "reason": f"patch_policy:{exc.code}"}
+
+    verification = asyncio.run(
+        modules["Verifier"](None, oracle).verify_static_assertion(request, snapshot, bundle, reason=reason)
+    )
+    finding_id = request.findings[0].stable_id
+    unproven = {item.get("finding_id"): item for item in verification.unproven_findings}
+    return {
+        "asserted": finding_id in verification.proven_finding_ids,
+        "status": verification.status,
+        "reason": (unproven.get(finding_id) or {}).get("code") or verification.reason_code,
+        "message": (unproven.get(finding_id) or {}).get("message"),
+        "static_assertion_reason": reason,
+        "verification_level": verification.verification_level,
+        "patch_description": template.description,
+        "patch_changes": template.changes,
+    }
+
+
 # One repository's dependencies are installed once and every one of its workspaces is pointed at
 # the result. A pair materializes the workspace twice per check and a repository has dozens of
 # pairs, so installing per workspace here would cost hours per repository and measure nothing the
@@ -623,8 +667,14 @@ def run_pairs(payload: dict[str, Any], findings: list[dict[str, Any]]) -> dict[s
     by_path = {item["path"]: item.get("content", "") for item in payload["files"] if item.get("content")}
 
     rows: list[dict[str, Any]] = []
-    counts = {"supported": 0, "patch": 0, "proof": 0, "both": 0, "verified": 0}
+    # `verified` is the executed count: a proof that failed on the original tree and passed on the
+    # patched one. `asserted` is the static assertion count, which is a different claim and is
+    # therefore a different column; the two are never added into one "fixed" number without
+    # saying which is which. `assertable` is how many findings the assertion was even tried on.
+    counts = {"supported": 0, "patch": 0, "proof": 0, "both": 0, "verified": 0, "assertable": 0, "asserted": 0}
     exceptions: list[dict[str, Any]] = []
+    # One oracle for the whole repository: it loads the analysis service's rule set once.
+    oracle = modules["create_rule_oracle"]() if modules.get("create_rule_oracle") else None
 
     for index, finding in enumerate(findings):
         path = finding.get("file_path") or ""
@@ -672,6 +722,22 @@ def run_pairs(payload: dict[str, Any], findings: list[dict[str, Any]]) -> dict[s
             counts["patch"] += int(has_patch)
             counts["proof"] += int(has_proof)
             if not (has_patch and has_proof):
+                # The static assertion's own route: a template patch and no proof, which is the
+                # only shape the engine will assert. A finding whose proof exists and fails is not
+                # asserted instead, because execution was available to it and it did not hold.
+                assertion_reason = (
+                    modules["static_assertion_reason"](family, f"model:{proof.reason}")
+                    if has_patch and not has_proof and modules.get("static_assertion_reason") and oracle is not None
+                    else None
+                )
+                if assertion_reason is not None:
+                    counts["assertable"] += 1
+                    started = time.perf_counter()
+                    row["assertion"] = _measure_static_assertion(
+                        modules, request, snapshot, template, assertion_reason, oracle
+                    )
+                    row["assertion"]["duration_ms"] = int((time.perf_counter() - started) * 1000)
+                    counts["asserted"] += int(bool(row["assertion"]["asserted"]))
                 rows.append(row)
                 continue
             counts["both"] += 1

@@ -337,8 +337,10 @@ def run_pairs(results: list[Path], cache: SnapshotCache, timeout: int, python: s
                   f"ecosystems={','.join(install.get('ecosystems') or []) or 'none'}", flush=True)
         print(f"  supported={counts.get('supported', 0)} patch={counts.get('patch', 0)} "
               f"proof={counts.get('proof', 0)} both={counts.get('both', 0)} "
-              f"verified={counts.get('verified', 0)} {record.get('wall_ms')}ms", flush=True)
-    totals = {key: 0 for key in ("supported", "patch", "proof", "both", "verified")}
+              f"verified={counts.get('verified', 0)} "
+              f"assertable={counts.get('assertable', 0)} asserted={counts.get('asserted', 0)} "
+              f"{record.get('wall_ms')}ms", flush=True)
+    totals = {key: 0 for key in ("supported", "patch", "proof", "both", "verified", "assertable", "asserted")}
     for record in records:
         for key, value in (((record.get("pairs") or {}).get("counts")) or {}).items():
             totals[key] = totals.get(key, 0) + int(value)

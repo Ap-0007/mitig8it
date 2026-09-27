@@ -27,6 +27,7 @@ from src.families import (
     STATIC_ASSERTION,
     WORKFLOW,
     WORKFLOW_HARDENING,
+    declares_static_assertion,
     family_assertion,
     family_supported,
     family_verification,
@@ -49,7 +50,11 @@ from src.templates import (
     environment_variable_name,
     generate_template,
 )
-from src.verification.verifier import STATIC_ASSERTION_VERIFICATION_LEVEL, VERIFICATION_LEVELS
+from src.verification.verifier import (
+    SANDBOX_VERIFICATION_LEVELS,
+    STATIC_ASSERTION_VERIFICATION_LEVEL,
+    VERIFICATION_LEVELS,
+)
 from tests.conftest import git_blob
 
 WORKFLOW_PATH = ".github/workflows/triage.yml"
@@ -179,45 +184,59 @@ class TestTheFamilyVerifiesByStaticAssertion:
         assert family_assertion(WORKFLOW_HARDENING, WORKFLOW) is None
         assert family_assertion(WORKFLOW_HARDENING, "python") is None
 
-    def test_the_level_is_named_but_does_not_exist_yet(self):
-        """`feat/static-assertion-verification` implements it. The name is declared here so the
-        gate can ask for it, and adding it to `VERIFICATION_LEVELS` is what turns this family on.
+    def test_the_level_exists_and_the_family_declares_it(self):
+        """The switch was one entry in one set, and the level has since been implemented.
+
+        `VERIFICATION_LEVELS` is every level a candidate may carry, so the gate's question now
+        answers true and this family is on. The set a sandbox driver may claim is the narrower
+        `SANDBOX_VERIFICATION_LEVELS`, which still excludes this level: it is produced by the
+        verifier from a scanner answer, never reported by a driver.
         """
         assert STATIC_ASSERTION_VERIFICATION_LEVEL == "static_assertion"
-        assert STATIC_ASSERTION_VERIFICATION_LEVEL not in VERIFICATION_LEVELS
-        assert static_assertion_level_available() is False
+        assert STATIC_ASSERTION_VERIFICATION_LEVEL in VERIFICATION_LEVELS
+        assert STATIC_ASSERTION_VERIFICATION_LEVEL not in SANDBOX_VERIFICATION_LEVELS
+        assert static_assertion_level_available() is True
+        assert declares_static_assertion(WORKFLOW_HARDENING) is True
 
 
-class TestTheGateRefusesUntilTheLevelLands:
-    def test_every_workflow_finding_is_refused_by_name(self, request_payload):
+class TestTheGateNoLongerRefusesTheFamily:
+    def test_a_workflow_finding_reaches_the_agent(self, request_payload):
+        """The level it needs exists, so the one gate this family had opens.
+
+        Nothing else in the gate applies to a workflow: there is no package manifest to prove, no
+        shell string and no compiled program.
+        """
         snapshot, request = _snapshot(
             request_payload, INJECTION_WORKFLOW, [_injection_finding(12), _injection_finding(17)]
         )
         for finding in request.findings:
-            gate = static_gate(snapshot, finding, WORKFLOW_HARDENING, WORKFLOW)
-            assert gate is not None, "a workflow patch was allowed through with no possible proof"
-            assert gate[0] == "static_assertion_verification_unavailable"
-            assert gate[1] == STATIC_ASSERTION_UNAVAILABLE_MESSAGE
+            assert static_gate(snapshot, finding, WORKFLOW_HARDENING, WORKFLOW) is None
 
     def test_the_reason_says_what_is_missing_and_that_the_finding_still_arrives(self):
+        """Kept, because the refusal is still reachable: an operator who sets
+        `allow_static_assertion_verification` false, or a deployment with no analysis service to
+        re-run the rule, is back in exactly the state this message describes."""
         assert "static assertion" in STATIC_ASSERTION_UNAVAILABLE_MESSAGE
         assert "not available yet" in STATIC_ASSERTION_UNAVAILABLE_MESSAGE
         assert "withheld" in STATIC_ASSERTION_UNAVAILABLE_MESSAGE
         assert "reported" in STATIC_ASSERTION_UNAVAILABLE_MESSAGE
 
-    def test_the_gate_opens_by_itself_when_the_level_arrives(self, request_payload, monkeypatch):
-        """The switch is one entry in one set, and this is the test that says so.
+    def test_the_gate_closes_again_if_the_level_is_ever_withdrawn(self, request_payload, monkeypatch):
+        """The switch reads one set, and this is the test that says so, from the other side.
 
-        When `feat/static-assertion-verification` adds the level, this gate stops refusing with
-        no further edit here. Nothing else in the gate applies to a workflow: there is no package
-        manifest to prove, no shell string and no compiled program.
+        A workflow patch nothing checked must not be published as if something had, so if the
+        level ever stops being a level a candidate may carry, the family is refused by name again
+        rather than shipping unverified.
         """
         monkeypatch.setattr(
             "src.gates.VERIFICATION_LEVELS",
-            VERIFICATION_LEVELS | {STATIC_ASSERTION_VERIFICATION_LEVEL},
+            VERIFICATION_LEVELS - {STATIC_ASSERTION_VERIFICATION_LEVEL},
         )
         snapshot, request = _snapshot(request_payload, INJECTION_WORKFLOW, [_injection_finding(12)])
-        assert static_gate(snapshot, request.findings[0], WORKFLOW_HARDENING, WORKFLOW) is None
+        gate = static_gate(snapshot, request.findings[0], WORKFLOW_HARDENING, WORKFLOW)
+        assert gate is not None, "a workflow patch was allowed through with no possible proof"
+        assert gate[0] == "static_assertion_verification_unavailable"
+        assert gate[1] == STATIC_ASSERTION_UNAVAILABLE_MESSAGE
 
     def test_the_other_families_are_unaffected(self, request_payload):
         """The new branch is keyed on the family's verification mode, not on the language, so it

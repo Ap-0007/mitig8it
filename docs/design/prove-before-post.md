@@ -72,6 +72,48 @@ measures rules separately: see [../validation/vulnerable-corpus-2026-09.md](../v
 **It is not a statement about your whole pull request.** A finding the tiers do not detect is not
 a finding, and recall is the weaker half of the measurement.
 
+## The static assertion, which is not the proof
+
+There is a second, weaker level, and the reason it exists is in the numbers below: most findings in
+a supported family never get a proof at all, because the module the proof would load imports a
+package a dependency-free sandbox has no copy of, or because the value reaching the sink comes from
+a call no test can set. Before this level, every one of those shipped nothing.
+
+A statically asserted candidate is one where **nothing was executed**. The rule that produced the
+finding is re-run over the original file and over the patched file, and the candidate is accepted
+only when the rule matched the original at the finding's line, does not match the patched file
+anywhere, no rule that was not already matching started matching, and nothing outside the finding's
+own lines and the lines the repair declared changed. The five clauses and their refusal codes are in
+[../../services/remediation-service/contracts/repair-v1.md](../../services/remediation-service/contracts/repair-v1.md).
+
+The distinction matters more than the name does, so it is worth saying plainly.
+
+| | An executed proof | A static assertion |
+| --- | --- | --- |
+| What ran | A regression test, on the original tree and on the patched tree | Nothing |
+| What it establishes | The vulnerability was reachable before the change and is not after it, and a second check says the code still does what it did | The rule that fired no longer fires, no other rule started firing, and nothing else in the file changed |
+| What it cannot see | Whether the repair is idiomatic, whether the file has another defect no rule matched | Whether the vulnerability was ever real, whether the patched module still runs, whether the feature still works |
+| Level | `development_unverified` or better | `static_assertion`, which is weaker than all of them |
+
+An assertion is a claim about the rule's opinion of two file texts. It is not a claim about
+behaviour, and it is specifically **not evidence that the finding was real**: if the rule fired on
+safe code, a patch that stops it firing asserts nothing worth having. That is why the level is never
+reached in preference to an executed proof, never an upgrade, and always reached last: a finding
+whose repair a test can drive gets the test. It is also why every statically asserted candidate
+carries, in the evidence a reviewer reads, that nothing was executed, that no regression test
+reproduced the finding, that the repository's test suite did not run, that no type check or build
+ran, and that the patched module was never even loaded.
+
+The last one is not a detail. The ordinary patch build requires the candidate module to check that
+it still loads, which runs whatever that module runs on import. A candidate whose evidence says
+nothing was executed cannot have been built that way, so the static assertion path builds without
+it and says so. What remains is a parse check and a static undefined-name check, and neither
+evaluates the file.
+
+**A batch carries one kind of evidence.** When a job produces any executed candidate, its
+statically asserted candidates are dropped rather than shipped beside them, because one batch
+cannot honestly be labelled with both.
+
 ## What the numbers say it has cost
 
 Insisting on the proof costs coverage, and it has cost more of it than it looks like it should.
@@ -84,7 +126,19 @@ Of 1819 findings, 249 were in a supported repair family with the file available.
 | The template can write a patch for | 62 |
 | The service can write a proof for | 16 |
 | Both, so a deterministic candidate is possible | 8 |
-| Verified end to end | **8** |
+| Verified end to end, by execution | **8** |
+| A patch and no proof, so the static assertion is the only route | 54 |
+| Statically asserted | **9** |
+| **A verified fix at any level** | **17** |
+
+The nine are measured in [../validation/static-assertion-2026-09.md](../validation/static-assertion-2026-09.md),
+and the split matters more than the total. Forty-one of the 54 are findings from one rule that is
+quarantined on its own measured precision and never posts, and every one of those is refused because
+the rule still matches the patched file. On the 163 findings from rules that do post, 13 reach the
+assertion and 9 of them hold. Six of the nine are `path_containment`, which had never reached a
+verified fix on real vulnerable code at any level, because the module a path traversal repair lives
+in imports the application's framework and the sandbox has none of it. Re-running the rule needs no
+framework, which is the level's whole value and also the whole of what it establishes.
 
 Three obstacles were removed over this period. The templates used to need an enclosing Express
 route and then an enclosing function; they now fall back to module scope. TypeScript used to be
@@ -117,10 +171,11 @@ The GitHub Action trial on ten real repositories says the same thing from the us
 comments posted, 63 of them true positives, and one fix in the whole trial. The report is
 [../validation/action-trial-2026-09.md](../validation/action-trial-2026-09.md).
 
-The authored corpus tells you something different and smaller. 59 fixtures pass under both
+The authored corpus tells you something different and smaller. 63 fixtures pass under both
 adapters with no unexpected failures, which says the fixtures, the grader and the pipeline agree
-with each other. It is not a measurement of repair quality, and 59 authored cases cannot establish
-a rate. [../../benchmarks/remediation/README.md](../../benchmarks/remediation/README.md) says so at
+with each other. 46 of the 51 supported fixtures are verified by execution and 5 by a static
+assertion, and the report says which cases are which rather than adding them into one number. It is
+not a measurement of repair quality, and 63 authored cases cannot establish a rate. [../../benchmarks/remediation/README.md](../../benchmarks/remediation/README.md) says so at
 more length.
 
 ## What would make it stronger

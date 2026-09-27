@@ -57,12 +57,34 @@ class RemediationHarnessTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         report = json.loads(completed.stdout)
-        # 46 supported, 9 negative and 4 adversarial across 59 fixtures. Asserted rather
+        # 51 supported, 8 negative and 4 adversarial across 63 fixtures. Asserted rather
         # than derived so adding a fixture is a deliberate change here too; these counts had
         # fallen behind the fixture set more than once before.
-        self.assertEqual(report["summary"]["eligible_supported_cases"], 46)
-        self.assertEqual(report["summary"]["negative_adversarial_cases"], 13)
+        self.assertEqual(report["summary"]["eligible_supported_cases"], 51)
+        self.assertEqual(report["summary"]["negative_adversarial_cases"], 12)
         self.assertEqual(report["summary"]["failures"], [])
+
+    def test_five_fixtures_declare_the_static_assertion_and_no_other_fixture_may_reach_it(self):
+        """The level's share of the corpus, asserted rather than derived.
+
+        Five of the 51 supported fixtures declare `static_assertion`; every other supported
+        fixture is held to an executed level. A repair that quietly stopped being executed would
+        otherwise still read as a pass, which is the whole reason the field exists.
+        """
+        fixtures = [fixture for _, fixture in load_fixtures()]
+        declared = sorted(item["id"] for item in fixtures if item.get("expected_verification_level") == "static_assertion")
+        self.assertEqual(declared, [
+            "js-module-scope-uncontrollable-001",
+            "js-static-assertion-command-001",
+            "js-static-assertion-credential-001",
+            "js-static-assertion-eval-001",
+            "js-static-assertion-path-001",
+        ])
+        # No fixture declares any other level: the executed levels are the adapter's default, and
+        # naming one in a fixture would pin a case to a sandbox the harness does not choose.
+        self.assertEqual(
+            {item.get("expected_verification_level") for item in fixtures}, {None, "static_assertion"}
+        )
 
     def test_reference_candidate_must_match_the_expected_patch_not_only_claim_ready(self):
         fixture_dir, fixture = next((directory, item) for directory, item in load_fixtures() if item["id"] == "sql-parameterized-001")

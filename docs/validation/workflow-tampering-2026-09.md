@@ -233,8 +233,11 @@ visibility, which the analysis request already knows and does not currently pass
 - **The digest lookup is off by default.** The pinning repair needs the commit a tag resolves to,
   which has to be looked up while the product still has a network. `WORKFLOW_ACTION_DIGEST_LOOKUP`
   gates it and is unset by default, so today a finding carries the action reference and no digest,
-  and the repair is refused with `action_digest_unresolved` as well as with
-  `static_assertion_verification_unavailable`.
+  and the repair is refused with `action_digest_unresolved`. The other refusal this family carried,
+  `static_assertion_verification_unavailable`, is gone: the level the family declares now exists
+  ([static-assertion-2026-09.md](static-assertion-2026-09.md)). It remains reachable for an
+  operator who sets `allow_static_assertion_verification` false, or a deployment with no analysis
+  service to re-run the rule.
 
 ## Reproducing this
 

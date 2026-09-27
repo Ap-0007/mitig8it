@@ -6,7 +6,9 @@ yarn-error.log*
 
 # Python
 venv/
-.venv/
+# Any .venv, not only that exact name: a throwaway .venv-something is the shape a stray
+# interpreter tree arrives in, and one of them has already been committed by accident.
+.venv*/
 __pycache__/
 *.py[cod]
 *$py.class

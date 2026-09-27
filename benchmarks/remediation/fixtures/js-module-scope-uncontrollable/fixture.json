@@ -4,9 +4,11 @@
   "repository_id": "fixture-backup-archive-js",
   "split": "holdout",
   "family": "command_arguments",
-  "kind": "negative",
-  "expected_state": "unsupported",
+  "kind": "supported",
+  "expected_state": "ready",
+  "expected_verification_level": "static_assertion",
   "source": "app.js",
+  "reference_repair": "expected/app.js",
   "finding": {
     "id": "js-module-scope-uncontrollable-1",
     "rule_id": "cwe-78.js-exec-interpolated",
@@ -14,10 +16,15 @@
     "category": "command injection",
     "message": "An account name is interpolated into a command the module runs at import.",
     "path": "app.js",
-    "line_start": 9,
-    "line_end": 9
+    "line_start": 10,
+    "line_end": 10
   },
-  "reason": "The sink runs at import and its input comes from a call no test can set, so no regression test can fail on this code before a repair and pass after one. The proof is refused as module_scope_source_not_controllable, and a candidate with no reproducer is never shipped.",
+  "reason": "Reclassified from an abstention to a static assertion on 2026-09-27. The sink still runs at import on a value no test can set, so the proof is still refused as module_scope_source_not_controllable and no regression test can fail on this code before a repair and pass after one; what changed is that a refused proof is no longer the end of the road. The deterministic template repair for this site is now asserted at the static_assertion level instead, which is why the fixture asserts a repair at exactly that level rather than an abstention: keeping the abstention would have asserted that the engine ships nothing here, which is no longer true, and the corpus would have been testing a claim the product had stopped making.",
+  "trusted_fixture_test": {
+    "runtime": "node",
+    "path": "tests/verify.js",
+    "timeout_seconds": 5
+  },
   "budget": {
     "max_tool_calls": 20,
     "max_attempts": 3,

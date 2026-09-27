@@ -13,6 +13,13 @@ from ..sandbox import BrokerEvidenceError, BrokerTransportError, SandboxBroker
 from ..sandbox.broker import evidence_digest
 from ..sandbox.execution import aggregate_outcome
 from .checks import EffectiveChecks, build_effective_checks, generated_snapshot_entries
+from .static_assertion import (
+    NOT_REPAIRED,
+    NOTHING_EXECUTED,
+    RuleOracle,
+    RuleOracleError,
+    assert_statically,
+)
 
 PRODUCTION_VERIFICATION_LEVEL = "independent_sandbox"
 # Between the two: the check pair ran in separate Cloud Run job containers, each under its own
@@ -21,29 +28,33 @@ PRODUCTION_VERIFICATION_LEVEL = "independent_sandbox"
 # it is nothing like the development level, because no repository code touches this service.
 ISOLATED_JOB_VERIFICATION_LEVEL = "isolated_job"
 DEVELOPMENT_VERIFICATION_LEVEL = "development_unverified"
-# Declared here, and deliberately *not* in `VERIFICATION_LEVELS`.
+# Weaker than all three above, and weaker in kind rather than in degree: nothing ran. The three
+# levels above differ in how well isolated the thing that executed the repair was; this one is
+# the level for a candidate where nothing executed at all, and the rule that flagged the line
+# was re-run over the file text instead. `contracts/repair-v1.md` states its five clauses.
 #
-# The static assertion level is the one `feat/static-assertion-verification` is adding: the rule
-# that produced the finding fires on the original file, does not fire on the patched file, and
-# nothing else in the file changed. It executes nothing, so it is weaker than every level above,
-# and it carries its own name precisely so the evidence shown to a reviewer never overstates what
-# was checked.
-#
-# The name exists here because the `workflow_hardening` family is the first family that can only
-# ever use it, and that family's gate has to be able to ask whether the level has arrived. The
-# gate's question is literally `STATIC_ASSERTION_VERIFICATION_LEVEL in VERIFICATION_LEVELS`, so
-# the branch that implements the level turns the family on by adding one entry to that set. Until
-# then every candidate of the family is refused with a reason that says so, which is the whole
-# point: a workflow patch nothing checked must not be published as if something had.
+# `workflow_hardening` is the first family that can only ever use it, and that family's gate asks
+# whether the level has arrived by asking `STATIC_ASSERTION_VERIFICATION_LEVEL in
+# VERIFICATION_LEVELS` (`gates.static_assertion_level_available`). It is in that set now, so the
+# family is on; before it was, every candidate of the family was refused by name.
 STATIC_ASSERTION_VERIFICATION_LEVEL = "static_assertion"
-VERIFICATION_LEVELS = {
+# The levels a sandbox's own evidence may claim. The static assertion is deliberately absent: it
+# is produced by the verifier itself from a scanner answer, never reported by a driver, so a
+# broker that claims it is a broker claiming something it cannot have measured.
+SANDBOX_VERIFICATION_LEVELS = {
     PRODUCTION_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,
     DEVELOPMENT_VERIFICATION_LEVEL,
 }
+# Every level a candidate may carry. Membership here is what makes a level real: a family whose
+# repairs can only be asserted rather than executed asks `STATIC_ASSERTION_VERIFICATION_LEVEL in
+# VERIFICATION_LEVELS` before it lets a candidate through (`gates.static_assertion_level_available`),
+# and until the level was implemented that question answered false and the family was refused.
+VERIFICATION_LEVELS = SANDBOX_VERIFICATION_LEVELS | {STATIC_ASSERTION_VERIFICATION_LEVEL}
 # Weakest first. A caller that has to compare two levels orders them by this list rather than
 # by string, so adding a level never silently reorders anything.
 VERIFICATION_LEVEL_ORDER = (
+    STATIC_ASSERTION_VERIFICATION_LEVEL,
     DEVELOPMENT_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,
     PRODUCTION_VERIFICATION_LEVEL,
@@ -72,7 +83,6 @@ class VerificationResult:
     regression_checks: dict[str, str] = field(default_factory=dict)
 
 
-NOT_REPAIRED = "not_repaired"
 NOT_REPRODUCING = "regression_test_not_reproducing"
 
 
@@ -87,9 +97,106 @@ class FindingVerdicts:
     checks_by_finding: dict[str, str] = field(default_factory=dict)
 
 
+STATIC_ASSERTION_NOT_PERMITTED = "static_assertion_verification_not_permitted"
+STATIC_ASSERTION_ORACLE_UNAVAILABLE = "static_assertion_rule_oracle_unavailable"
+# The limitation a static assertion always carries. It is not a caveat that undoes the level; it
+# is the level, said out loud, so nobody reads a static assertion as a test result.
+STATIC_ASSERTION_LIMITATION = (
+    "nothing was executed: the repair was checked by re-running the rule that flagged the "
+    "finding over the original and the patched file, not by running a test"
+)
+
+
 class Verifier:
-    def __init__(self, broker: SandboxBroker):
+    def __init__(self, broker: SandboxBroker, rule_oracle: RuleOracle | None = None):
         self.broker = broker
+        # Supplied rather than constructed here, so a caller that has no analysis service (and
+        # therefore no static assertion) is a configuration fact rather than a failure mode.
+        self.rule_oracle = rule_oracle
+
+    async def verify_static_assertion(
+        self,
+        request: RepairRequest,
+        snapshot: Snapshot,
+        bundle: PatchBundle,
+        *,
+        reason: str,
+    ) -> VerificationResult:
+        """Verify this candidate at the `static_assertion` level. Nothing is executed.
+
+        The findings are the request's own, exactly as `verify` reads them. Never an upgrade and
+        never a fallback the verifier reaches for on its own: the caller has already established
+        that these findings' repairs cannot be proven by execution, or that the family declares
+        the static assertion, and `reason` records which.
+        """
+        findings = list(request.findings)
+        if not request.policy.allow_static_assertion_verification:
+            return VerificationResult(
+                "unsupported",
+                {"reason_code": STATIC_ASSERTION_NOT_PERMITTED, "verification_level": STATIC_ASSERTION_VERIFICATION_LEVEL},
+                None,
+                STATIC_ASSERTION_NOT_PERMITTED,
+                STATIC_ASSERTION_VERIFICATION_LEVEL,
+                ["a static assertion was the only available evidence and policy does not allow it"],
+                [],
+                [self._untested(finding.stable_id) for finding in findings],
+            )
+        if self.rule_oracle is None:
+            # No oracle is not an empty match set. The candidate is refused.
+            return self._static_assertion_refusal(
+                findings, STATIC_ASSERTION_ORACLE_UNAVAILABLE,
+                "No analysis service is configured to re-run the rule, so the patch was not asserted.",
+            )
+        try:
+            outcome = await assert_statically(request, snapshot, bundle, findings, self.rule_oracle, reason=reason)
+        except RuleOracleError as exc:
+            return self._static_assertion_refusal(
+                findings, exc.code,
+                f"The rule could not be re-run over the patched file, so the patch was not asserted ({exc.code}).",
+            )
+        evidence = {
+            **outcome.evidence,
+            "outcome": "passed" if outcome.proven else "failed",
+            "summary": outcome.message,
+        }
+        limitations = [STATIC_ASSERTION_LIMITATION, *self._static_assertion_limitations(bundle)]
+        digest = digest_json(evidence)
+        if not outcome.proven:
+            return VerificationResult(
+                "failed", evidence, digest, outcome.reason_code or "verification_failed",
+                STATIC_ASSERTION_VERIFICATION_LEVEL, limitations, [], outcome.unproven,
+            )
+        # Some proven and some not is a normal outcome and is reported the way an executed run
+        # reports it: the candidate claims exactly `proven`, and the rest carry their reason.
+        return VerificationResult(
+            "passed", evidence, digest, None, STATIC_ASSERTION_VERIFICATION_LEVEL,
+            limitations, outcome.proven, outcome.unproven,
+        )
+
+    @staticmethod
+    def _static_assertion_limitations(bundle: PatchBundle) -> list[str]:
+        limitations = [
+            "no regression test reproduced this finding, so nothing demonstrates that the vulnerability "
+            "was present before the change or absent after it",
+            "the repository's original test suite was not run",
+            "no type check or build was run",
+        ]
+        limitations.extend(str(item)[:200] for item in bundle.limitations[:20])
+        return limitations
+
+    @staticmethod
+    def _static_assertion_refusal(findings: list[Any], code: str, message: str) -> VerificationResult:
+        evidence = {
+            "reason_code": code,
+            "verification_level": STATIC_ASSERTION_VERIFICATION_LEVEL,
+            "executed": False,
+            "nothing_executed": NOTHING_EXECUTED,
+        }
+        return VerificationResult(
+            "inconclusive", evidence, None, code, STATIC_ASSERTION_VERIFICATION_LEVEL,
+            [f"the static assertion did not complete: {code}"], [],
+            [{"finding_id": finding.stable_id, "code": code, "message": message} for finding in findings],
+        )
 
     async def verify(self, request: RepairRequest, snapshot: Snapshot, bundle: PatchBundle) -> VerificationResult:
         if request.policy.sandbox_image_digest is None and not request.policy.allow_development_verification:
@@ -342,7 +449,9 @@ class Verifier:
         if not isinstance(evidence, dict):
             raise BrokerEvidenceError("broker evidence is not an object")
         level = evidence.get("verification_level", PRODUCTION_VERIFICATION_LEVEL)
-        if level not in VERIFICATION_LEVELS:
+        # The sandbox set, not every level: a broker that reported `static_assertion` would be
+        # claiming a level no driver can measure, and that is rejected rather than trusted.
+        if level not in SANDBOX_VERIFICATION_LEVELS:
             raise BrokerEvidenceError("broker verification level is unrecognized")
         return str(level)
 

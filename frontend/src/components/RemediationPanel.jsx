@@ -13,10 +13,21 @@ const label = (state) => String(state || 'queued').replaceAll('_', ' ')
 
 // What each verification level is called on screen. The isolated job level names the sandbox
 // and what it denied, so nobody has to read `isolated_job` and guess how strong it is; the
-// development level keeps its own warning styling below.
+// development level and the static assertion keep their own warning styling below.
 const VERIFICATION_LEVEL_TEXT = {
   independent_sandbox: 'isolated sandbox',
   isolated_job: 'isolated sandbox (Cloud Run job, network denied)',
+}
+
+// The two levels that get the amber warning, because a reader has to be told what they do not
+// establish. `development_unverified` means a test ran with no isolation; `static_assertion`
+// means no test ran at all. Weakest first, mirroring the order the repair service ranks by
+// and the `verification_levels` list in the capability report.
+const WARNING_LEVEL_TEXT = {
+  static_assertion: 'Verification level: static assertion. No code was executed: the rule that flagged '
+    + 'this finding no longer matches the patched file, nothing else in the file changed, and no other '
+    + 'rule started matching. Nothing demonstrates the vulnerability was reachable before the change.',
+  development_unverified: 'Verification level: development unverified. This fix was not verified in an isolated sandbox.',
 }
 const errorMessage = (error) => error?.response?.data?.error || 'Could not refresh repair status. Refresh before taking another action.'
 const buttonClass = 'rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50'
@@ -232,7 +243,7 @@ export function RepairSession({ pullRequestId, findingId = null, liveHeadSha = n
     const behavior = behaviorOutcome(candidate.evidence)
     const level = candidate.verification_level || candidate.evidence?.verification_level || null
     const treeOid = candidate.evidence?.verified_tree_oid || preview.verified_tree_oid || null
-    const unverified = level === 'development_unverified'
+    const warning = WARNING_LEVEL_TEXT[level] || null
     const status = candidate.status || 'applicable'
     const stale = status === 'stale'
     const applied = status === 'applied'
@@ -269,10 +280,8 @@ export function RepairSession({ pullRequestId, findingId = null, liveHeadSha = n
           )
         })}
         <p className="text-sm text-neutral-600">Behavior preserved: {behavior}</p>
-        <p className={`text-sm ${unverified ? 'rounded bg-amber-50 p-2 font-medium text-amber-900' : 'text-neutral-600'}`}>
-          {unverified
-            ? 'Verification level: development unverified. This fix was not verified in an isolated sandbox.'
-            : `Verification level: ${VERIFICATION_LEVEL_TEXT[level] || label(level || 'unknown')}`}
+        <p className={`text-sm ${warning ? 'rounded bg-amber-50 p-2 font-medium text-amber-900' : 'text-neutral-600'}`}>
+          {warning || `Verification level: ${VERIFICATION_LEVEL_TEXT[level] || label(level || 'unknown')}`}
         </p>
         {limits.length > 0 && <div className="rounded bg-amber-50 p-2 text-xs text-amber-900">
           <p className="font-medium">Coverage limits</p>

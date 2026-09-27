@@ -947,6 +947,15 @@ def _load_module(root: Path, path: str) -> dict[str, Any]:
     return {"state": "error", "name": str(report.get("name", "Error")), "message": message}
 
 
+# What a bundle records instead of a load check when the caller asked for no execution. It is a
+# limitation rather than a silence: a reviewer reading a statically asserted candidate is told
+# that nobody has established the patched module still loads.
+NO_LOAD_CHECK_LIMITATION = (
+    "runtime load check not performed for {path}: nothing was executed, so it is not established "
+    "that the patched module still loads"
+)
+
+
 def _load_checks(snapshot: Snapshot, replacements: dict[str, str]) -> list[str]:
     """Loads every changed JavaScript file from the candidate tree. Returns limitations.
 
@@ -1237,8 +1246,18 @@ def build_patch_bundle(
     snapshot: Snapshot,
     proposed_changes: list[dict[str, Any]],
     regression_tests: list[dict[str, Any]] | None = None,
+    *,
+    load_checks: bool = True,
 ) -> PatchBundle:
-    """Builds a bundle from the agent's line-range hunks against the exact snapshot."""
+    """Builds a bundle from the agent's line-range hunks against the exact snapshot.
+
+    `load_checks=False` builds the bundle without requiring the patched module. Only the static
+    assertion path passes it, and it passes it because the level's fifth clause is that nothing
+    was executed: the load check requires the candidate module, which runs whatever that module
+    runs on import, so a bundle built with it is not a bundle nothing ran over. The check is
+    recorded as not performed rather than dropped, and `_reject_undefined_names` below still
+    catches the failure a load check most often finds, a hunk using a name no hunk imported.
+    """
     if not proposed_changes:
         raise PatchPolicyError("proposal_contains_no_changes", "Send at least one change hunk.")
     hunks = locate_hunks(snapshot, proposed_changes)
@@ -1250,7 +1269,9 @@ def build_patch_bundle(
                 f"Each hunk's finding_id must be one of the task's finding ids: {', '.join(known)}. "
                 "An import-only hunk names the finding whose fix needs it.",
             )
-    return _build_bundle_from_contents(request, snapshot, render_hunks(snapshot, hunks), regression_tests, tuple(hunks))
+    return _build_bundle_from_contents(
+        request, snapshot, render_hunks(snapshot, hunks), regression_tests, tuple(hunks), load_checks=load_checks
+    )
 
 
 def _build_bundle_from_contents(
@@ -1259,6 +1280,8 @@ def _build_bundle_from_contents(
     replacements: dict[str, str],
     regression_tests: list[dict[str, Any]] | None = None,
     hunks: tuple[LocatedHunk, ...] = (),
+    *,
+    load_checks: bool = True,
 ) -> PatchBundle:
     if not replacements:
         raise PatchPolicyError("proposal_contains_no_changes")
@@ -1328,7 +1351,10 @@ def _build_bundle_from_contents(
             )
         )
 
-    limitations.extend(_load_checks(snapshot, replacements))
+    if load_checks:
+        limitations.extend(_load_checks(snapshot, replacements))
+    else:
+        limitations.extend(NO_LOAD_CHECK_LIMITATION.format(path=path) for path in sorted(replacements))
     for path, replacement in sorted(replacements.items()):
         # After the load check: a name used at module top level already failed there with the
         # runtime's own diagnostic, and this catches the ones inside function bodies.
@@ -1389,12 +1415,18 @@ def _ranges_conflict(first: tuple[int, int, list[str]], second: tuple[int, int, 
     return first_start < second_end and second_start < first_end
 
 
-def combine_patch_bundles(request: RepairRequest, snapshot: Snapshot, bundles: list[PatchBundle]) -> PatchBundle:
+def combine_patch_bundles(
+    request: RepairRequest, snapshot: Snapshot, bundles: list[PatchBundle], *, load_checks: bool = True
+) -> PatchBundle:
     """Unions candidate patches into one tree, rejecting candidates that edit the same range.
 
     Candidate contents are reduced to their changed line ranges against the exact snapshot.
     Two candidates whose ranges intersect on one file cannot be combined mechanically, so the
     batch is rejected as `overlapping_candidates` instead of silently preferring one candidate.
+
+    `load_checks=False` carries the static assertion's fifth clause into the combine: a batch of
+    statically asserted candidates must not require the union either, or the batch would have
+    executed something none of its candidates did.
     """
     if not bundles:
         raise PatchPolicyError("batch_contains_no_candidates")
@@ -1444,6 +1476,7 @@ def combine_patch_bundles(request: RepairRequest, snapshot: Snapshot, bundles: l
         replacements,
         [combined_tests[path] for path in sorted(combined_tests)],
         tuple(sorted(merged_hunks.values(), key=lambda item: (item.path, item.start_line, item.end_line))),
+        load_checks=load_checks,
     )
 
 
