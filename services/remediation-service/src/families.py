@@ -105,6 +105,22 @@ PYTHON_FAMILY_ASSERTIONS: dict[str, str] = {
 }
 
 
+# Families whose repair is asserted statically rather than executed, because no regression test
+# could demonstrate the repair even in principle. The two categories this is for are a tampered
+# GitHub Actions workflow and a secret committed in the diff: no unit test shows that a workflow
+# is secure, and none shows that a secret is gone from history. Neither is a detection family
+# yet, so this set is empty, and the only route to a static assertion today is the other one:
+# a family that *can* be executed, for a finding whose execution was refused for a recorded
+# reason. Adding a family here is how a family declares it, and it must never name a family
+# whose repair a proof can drive, because that would trade an executed proof for a weaker one.
+STATIC_ASSERTION_FAMILIES: frozenset[str] = frozenset()
+
+
+def declares_static_assertion(family: str | None) -> bool:
+    """Whether this family's repairs are asserted statically by declaration."""
+    return family is not None and family in STATIC_ASSERTION_FAMILIES
+
+
 def language_of_path(path: str | None) -> str | None:
     """The toolchain a file belongs to, by extension, or None when neither can check it."""
     if not path:

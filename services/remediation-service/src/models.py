@@ -143,6 +143,14 @@ class RepairPolicy(StrictModel):
     # it is real verification rather than a development convenience. An operator who wants
     # nothing below the Kubernetes/gVisor level sets this false.
     allow_isolated_job_verification: bool = True
+    # The static assertion level: the rule that flagged the line is re-run over the original and
+    # the patched file, nothing is executed, and the candidate is accepted only when all five
+    # clauses in `contracts/repair-v1.md` hold. Default true, because it is never an upgrade: a
+    # finding whose family can be proven by execution always takes the execution path, and this
+    # level is reached only by a family that declares it or by a finding whose execution was
+    # refused for a reason the evidence records. An operator who will show a reviewer nothing
+    # that was not executed sets this false.
+    allow_static_assertion_verification: bool = True
     # Plan section 8 step 4: the agent must ship a reproducer that distinguishes a real repair
     # from disabling the feature. With this set, an empty `verification_checks` is allowed,
     # because the generated regression test supplies the exploit check.

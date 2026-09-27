@@ -21,6 +21,7 @@ from src.verification.verifier import (
     DEVELOPMENT_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,
     PRODUCTION_VERIFICATION_LEVEL,
+    STATIC_ASSERTION_VERIFICATION_LEVEL,
     VERIFICATION_LEVEL_ORDER,
     VERIFICATION_LEVELS,
 )
@@ -120,12 +121,16 @@ async def verify_with(driver, request_payload, source, **kwargs):
 
 def test_the_level_sits_between_development_and_the_production_sandbox():
     assert VERIFICATION_LEVEL_ORDER == (
+        STATIC_ASSERTION_VERIFICATION_LEVEL,
         DEVELOPMENT_VERIFICATION_LEVEL,
         ISOLATED_JOB_VERIFICATION_LEVEL,
         PRODUCTION_VERIFICATION_LEVEL,
     )
     assert ISOLATED_JOB_VERIFICATION_LEVEL in VERIFICATION_LEVELS
     assert ISOLATED_JOB_VERIFICATION_LEVEL == "isolated_job"
+    # A sandbox may not claim the static assertion: it is produced by the verifier from a scanner
+    # answer, so a driver reporting it would be reporting something it never measured.
+    assert STATIC_ASSERTION_VERIFICATION_LEVEL not in VERIFICATION_LEVELS
 
 
 def test_the_policy_flag_defaults_to_allowing_the_level(request_payload):
