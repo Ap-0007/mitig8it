@@ -20,8 +20,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aicodesentry/mitig8it/action@main
+      # `v1` is the released major; it only ever moves forward within 1.x.
+      # A digest pin is stronger, because a tag can be moved and a digest cannot:
+      #   gh api repos/aicodesentry/mitig8it/commits/v1 --jq .sha
+      # then use that sha as the ref, keeping `# v1` in a trailing comment.
+      - uses: aicodesentry/mitig8it/action@v1
 ```
+
+## Which ref to pin
+
+| Ref | What it promises |
+| --- | --- |
+| `@v1` | The newest 1.x release. Inputs, outputs and the exclusion file format do not change under you |
+| `@v1.0.0` | One release, frozen. It still has to be bumped by hand to get a fix |
+| `@<40-character sha>` | One commit, and nothing can move it. The strongest pin, and the one our own rule asks for |
+
+`@main` is not on the list on purpose. It is our default branch, it moves every time a pull
+request lands, and telling you to run it is exactly what
+`cwe-1357.gha-third-party-action-unpinned` flags in other people's workflows. The versioning
+policy, and what may change without a major bump, is in [releasing](../releasing.md).
 
 ## Permissions
 

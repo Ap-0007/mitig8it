@@ -31,7 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aicodesentry/mitig8it/action@main
+      # `v1` is the released major; it only ever moves forward within 1.x.
+      # A digest pin is stronger, because a tag can be moved and a digest cannot:
+      #   gh api repos/aicodesentry/mitig8it/commits/v1 --jq .sha
+      # then use that sha as the ref, keeping `# v1` in a trailing comment.
+      - uses: aicodesentry/mitig8it/action@v1
 ```
 
 That is the whole installation, and to remove it you delete the file. It runs in your own runner

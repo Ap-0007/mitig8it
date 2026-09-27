@@ -18,10 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aicodesentry/mitig8it/action@main
+      # `v1` is the released major; it only ever moves forward within 1.x.
+      # A digest pin is stronger, because a tag can be moved and a digest cannot:
+      #   gh api repos/aicodesentry/mitig8it/commits/v1 --jq .sha
+      # then use that sha as the ref, keeping `# v1` in a trailing comment.
+      - uses: aicodesentry/mitig8it/action@v1
 ```
 
 That is the whole installation. To remove it, delete the file.
+
+`@v1` rather than `@main` is not a style preference. This product's own highest-precision rule,
+`cwe-1357.gha-third-party-action-unpinned`, flags a third-party action referenced by a branch or a
+tag, and it would flag a quickstart that told you to run whatever is on our default branch today.
+The rule's own advice is the digest, so the two lines above say how to get one; `@v1` is what the
+five-line install shows because it is the form a reader can retype. What each pin promises you is
+in [docs/releasing.md](../docs/releasing.md).
 
 ## Why these permissions, and no others
 
@@ -206,7 +217,7 @@ docker build --file "${GITHUB_ACTION_PATH}/Dockerfile" --tag mitig8it-action:loc
 ```
 
 The parent of the action path is the repository root in both cases that matter: `uses: ./action`
-resolves inside your checkout, and a remote `uses: aicodesentry/mitig8it/action@ref` makes GitHub
+resolves inside your checkout, and a remote `uses: aicodesentry/mitig8it/action@<ref>` makes GitHub
 check out the whole repository and point the action path at the subdirectory in it.
 
 Both the action and CI build through the same script, `action/build-image.sh`, so the image the
