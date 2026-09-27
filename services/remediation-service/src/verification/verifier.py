@@ -21,6 +21,21 @@ PRODUCTION_VERIFICATION_LEVEL = "independent_sandbox"
 # it is nothing like the development level, because no repository code touches this service.
 ISOLATED_JOB_VERIFICATION_LEVEL = "isolated_job"
 DEVELOPMENT_VERIFICATION_LEVEL = "development_unverified"
+# Declared here, and deliberately *not* in `VERIFICATION_LEVELS`.
+#
+# The static assertion level is the one `feat/static-assertion-verification` is adding: the rule
+# that produced the finding fires on the original file, does not fire on the patched file, and
+# nothing else in the file changed. It executes nothing, so it is weaker than every level above,
+# and it carries its own name precisely so the evidence shown to a reviewer never overstates what
+# was checked.
+#
+# The name exists here because the `workflow_hardening` family is the first family that can only
+# ever use it, and that family's gate has to be able to ask whether the level has arrived. The
+# gate's question is literally `STATIC_ASSERTION_VERIFICATION_LEVEL in VERIFICATION_LEVELS`, so
+# the branch that implements the level turns the family on by adding one entry to that set. Until
+# then every candidate of the family is refused with a reason that says so, which is the whole
+# point: a workflow patch nothing checked must not be published as if something had.
+STATIC_ASSERTION_VERIFICATION_LEVEL = "static_assertion"
 VERIFICATION_LEVELS = {
     PRODUCTION_VERIFICATION_LEVEL,
     ISOLATED_JOB_VERIFICATION_LEVEL,

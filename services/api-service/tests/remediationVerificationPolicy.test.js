@@ -86,8 +86,12 @@ describe('remediation verification policy', () => {
   test('an absent allowed-families list takes the service default, which includes the Python families', () => {
     delete process.env.REMEDIATION_ALLOWED_RULE_FAMILIES_JSON;
     const current = policy.getPolicy();
+    // `workflow_hardening` is in the default so an operator can switch it off. It cannot publish
+    // anything today whatever this list says: the repair service refuses every candidate of that
+    // family by name until the static assertion verification level exists.
     expect(current.allowed_rule_families).toEqual([
       'sql_parameterization', 'command_arguments', 'path_containment', 'hardcoded_credential', 'code_injection_eval',
+      'workflow_hardening',
     ]);
     expect(current.allowed_rule_families).toEqual([...policy.DEFAULT_POLICY.allowed_rule_families]);
     expect(current.repair_service_configured).toBe(true);

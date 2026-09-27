@@ -12,8 +12,15 @@ const DEFAULT_POLICY = Object.freeze({
   // The families the repair service can repair and prove: the three JavaScript families plus
   // the two Python-only ones (hardcoded credentials moved to the environment, eval replaced
   // by ast.literal_eval). REMEDIATION_ALLOWED_RULE_FAMILIES_JSON narrows or overrides this.
+  //
+  // `workflow_hardening` is listed so an operator can turn it off, not because it can ship: it
+  // is the one family that verifies by static assertion rather than by a regression test, that
+  // verification level is not implemented yet, and the repair service refuses every candidate of
+  // the family by name until it is. Leaving the family out here would have hidden the refusal
+  // behind a policy message that says something else.
   allowed_rule_families: Object.freeze([
     'sql_parameterization', 'command_arguments', 'path_containment', 'hardcoded_credential', 'code_injection_eval',
+    'workflow_hardening',
   ]),
   repair_memory_expiry_days: 90,
   // The sandbox deadline for one verification, enforced by the broker across every
