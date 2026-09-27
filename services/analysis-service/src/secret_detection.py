@@ -481,8 +481,10 @@ PLACEHOLDER_PASSWORD_RE = re.compile(
 # service alias grants access to nothing outside the developer's own machine or compose
 # network, and the password in it is a local development password. Four of the five
 # connection strings this detector found in our own tree were exactly that.
+# The bind-all address is in the set as a host to recognize and dismiss, never as an address
+# anything here listens on, which is the only thing bandit's B104 is about.
 LOCAL_OR_EXAMPLE_HOSTS = frozenset({
-    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "host.docker.internal",
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "host.docker.internal",  # nosec B104
     "example.com", "example.org", "example.net", "test.com", "mydomain.com",
 })
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
