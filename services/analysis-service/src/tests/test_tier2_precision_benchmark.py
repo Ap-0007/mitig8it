@@ -18,12 +18,18 @@ from pathlib import Path
 import pytest
 import yaml
 
+from main import partition_by_posting_policy
 from opengrep_runner import RULES_DIR, load_rule_metadata, quarantined_rule_ids, run_opengrep
 
 CASES_PATH = Path(__file__).resolve().parents[4] / "benchmarks" / "tier2-precision" / "cases.json"
 
 # The coverage files. They are the rule set the benchmark is responsible for.
-COVERAGE_FILES = ("javascript_coverage.yml", "python_coverage.yml", "template_coverage.yml")
+COVERAGE_FILES = (
+    "javascript_coverage.yml",
+    "python_coverage.yml",
+    "template_coverage.yml",
+    "workflow_coverage.yml",
+)
 
 
 def _coverage_rule_ids() -> list[str]:
@@ -85,6 +91,48 @@ class TestTruePositives:
         assert f"opengrep.{case['rule']}" in fired, (
             f"{case['rule']} did not fire on its own fixture; it fired: {sorted(fired) or 'nothing'}"
         )
+
+
+class TestAQuarantinedRuleNeverPosts:
+    """A quarantined rule may fire. What it may not do is arrive.
+
+    The fixtures above are deliberately kept for quarantined rules, because a quarantined rule
+    is expected to earn its way back and the fixture is what the re-enabling is measured
+    against. That means the benchmark holds live code that several quarantined rules match, and
+    it is the right place to assert the rest of the contract: those matches are removed by
+    `main.partition_by_posting_policy` before a response is built, so nothing is posted to
+    GitHub, nothing reaches the check summary and nothing is handed to remediation.
+
+    Without this the gate would pass on the day someone flipped a `posting` key by accident.
+    """
+
+    def test_the_fixtures_do_produce_quarantined_findings(self):
+        """Otherwise the assertion below is vacuous."""
+        quarantined = quarantined_rule_ids()
+        assert quarantined, "no rule is quarantined, so this class asserts nothing"
+        matched = {
+            case["rule"]
+            for case in _cases()
+            if case["expect"] == "finding" and f"opengrep.{case['rule']}" in quarantined
+        }
+        assert matched, "no fixture covers a quarantined rule, so this class asserts nothing"
+
+    def test_nothing_quarantined_survives_the_posting_policy(self, scan):
+        quarantined = quarantined_rule_ids()
+        findings = [
+            {"rule_id": rule_id, "file_path": path}
+            for path, rule_ids in scan.items()
+            for rule_id in rule_ids
+        ]
+        postable, withheld = partition_by_posting_policy(findings)
+        leaked = sorted({f["rule_id"] for f in postable} & quarantined)
+        assert not leaked, (
+            f"{leaked} fired on a benchmark fixture and survived the posting policy; a "
+            "quarantined rule must never reach a reviewer"
+        )
+        # And the removal is real rather than a relabelling: what was dropped is exactly the
+        # quarantined matches, so no posting rule was lost with them.
+        assert {f["rule_id"] for f in withheld} <= quarantined
 
 
 class TestNoFindingLines:

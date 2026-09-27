@@ -1014,6 +1014,134 @@
       "path": "negative/erb_trim_mode.erb",
       "code": "<%- total = items.count -%>\n<h1><%= @title %></h1>\n<p><%= @body %></p>\n",
       "note": "ERB's trim-mode tag is whitespace control, not unescaped output, and the plain output tag escapes. Reading the trim tag as a sink would report every trimmed tag in the file."
+    },
+    {
+      "id": "cwe-829.gha-untrusted-checkout-privileged-trigger",
+      "expect": "finding",
+      "rule": "cwe-829.gha-untrusted-checkout-privileged-trigger",
+      "path": ".github/workflows/positive-untrusted-checkout.yml",
+      "code": "name: label\non:\n  pull_request_target:\n    types: [opened]\njobs:\n  label:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n"
+    },
+    {
+      "id": "cwe-829.gha-build-step-under-privileged-trigger",
+      "expect": "finding",
+      "rule": "cwe-829.gha-build-step-under-privileged-trigger",
+      "path": ".github/workflows/positive-build-under-target.yml",
+      "code": "name: preview\non:\n  pull_request_target:\n    types: [opened, synchronize]\njobs:\n  preview:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: build the branch\n        run: |\n          # dependencies first\n          npm ci\n          npm run build\n"
+    },
+    {
+      "id": "cwe-78.gha-run-untrusted-interpolation",
+      "expect": "finding",
+      "rule": "cwe-78.gha-run-untrusted-interpolation",
+      "path": ".github/workflows/positive-run-interpolation.yml",
+      "code": "name: greet\non:\n  issue_comment:\n    types: [created]\njobs:\n  greet:\n    runs-on: ubuntu-latest\n    steps:\n      - name: echo the comment\n        run: |\n          set -eu\n          echo \"${{ github.event.comment.body }}\" >> body.md\n"
+    },
+    {
+      "id": "cwe-1357.gha-third-party-action-unpinned",
+      "expect": "finding",
+      "rule": "cwe-1357.gha-third-party-action-unpinned",
+      "path": ".github/workflows/positive-unpinned-action.yml",
+      "code": "name: coverage\non: push\njobs:\n  coverage:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: codecov/codecov-action@v5\n"
+    },
+    {
+      "id": "cwe-732.gha-permissions-write-all",
+      "expect": "finding",
+      "rule": "cwe-732.gha-permissions-write-all",
+      "path": ".github/workflows/positive-write-all.yml",
+      "code": "name: release\non: push\npermissions: write-all\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+    },
+    {
+      "id": "cwe-732.gha-write-permission-under-privileged-trigger",
+      "expect": "finding",
+      "rule": "cwe-732.gha-write-permission-under-privileged-trigger",
+      "path": ".github/workflows/positive-write-scope-under-target.yml",
+      "code": "name: comment\non:\n  pull_request_target:\n    types: [opened]\npermissions:\n  contents: write\njobs:\n  comment:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+    },
+    {
+      "id": "cwe-522.gha-persist-credentials-under-privileged-trigger",
+      "expect": "finding",
+      "rule": "cwe-522.gha-persist-credentials-under-privileged-trigger",
+      "path": ".github/workflows/positive-persist-credentials.yml",
+      "code": "name: fixup\non:\n  pull_request_target:\n    types: [synchronize]\njobs:\n  fixup:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.ref }}\n          persist-credentials: true\n"
+    },
+    {
+      "id": "cwe-200.gha-secret-in-untrusted-checkout-job",
+      "expect": "finding",
+      "rule": "cwe-200.gha-secret-in-untrusted-checkout-job",
+      "path": ".github/workflows/positive-secret-with-untrusted-checkout.yml",
+      "code": "name: preview deploy\non:\n  pull_request_target:\n    types: [opened]\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - name: push the preview\n        env:\n          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n        run: ./deploy.sh\n"
+    },
+    {
+      "id": "cwe-668.gha-self-hosted-runner-fork-trigger",
+      "expect": "finding",
+      "rule": "cwe-668.gha-self-hosted-runner-fork-trigger",
+      "path": ".github/workflows/positive-self-hosted-fork-trigger.yml",
+      "code": "name: integration\non:\n  pull_request:\n    branches: [main]\njobs:\n  integration:\n    runs-on: self-hosted\n    steps:\n      - uses: actions/checkout@v4\n"
+    },
+    {
+      "id": "corpus.cwe-1357.gha-third-party-action-unpinned.branch-reference",
+      "expect": "finding",
+      "rule": "cwe-1357.gha-third-party-action-unpinned",
+      "path": ".github/workflows/corpus-unpinned-branch-reference.yml",
+      "note": "benbusby/whoogle-search .github/workflows/pypi.yml:36 at 8830615abcf17e0cd3991fbf963debfb161784cd. Adjudicated true: pypa/gh-action-pypi-publish@master is a branch, and the step is handed the TestPyPI token.",
+      "code": "name: pypi\non:\n  push:\n    tags:\n      - v*\njobs:\n  build-n-publish:\n    runs-on: ubuntu-latest\n    steps:\n    - name: Publish distribution to TestPyPI\n      uses: pypa/gh-action-pypi-publish@master\n      with:\n        password: ${{ secrets.TEST_PYPI_API_TOKEN }}\n        repository_url: https://test.pypi.org/legacy/\n"
+    },
+    {
+      "id": "corpus.cwe-1357.gha-third-party-action-unpinned.release-branch",
+      "expect": "finding",
+      "rule": "cwe-1357.gha-third-party-action-unpinned",
+      "path": ".github/workflows/corpus-unpinned-release-branch.yml",
+      "note": "webcomics/dosage .github/workflows/publish.yaml:67 at f2817cca7ff5511d9be56750b2d2165d4c3b2f14. Adjudicated true: pypa/gh-action-pypi-publish@release/v1 is a branch reference in the publish job. The `actions/download-artifact@v8` step above it is deliberately kept, because a first-party namespace must stay silent.",
+      "code": "name: publish\non:\n  push:\n    tags:\n      - v*\njobs:\n  publish:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - name: Retrieve build artifacts\n        uses: actions/download-artifact@v8\n        with:\n          name: dists\n          path: dist/\n\n      - name: Publish package distributions to PyPI\n        uses: pypa/gh-action-pypi-publish@release/v1\n"
+    },
+    {
+      "id": "corpus.cwe-1357.gha-third-party-action-unpinned.major-tag",
+      "expect": "finding",
+      "rule": "cwe-1357.gha-third-party-action-unpinned",
+      "path": ".github/workflows/corpus-unpinned-major-tag.yml",
+      "note": "encode/django-rest-framework .github/workflows/main.yml:76 at b578eab1cad0e4ba5b4e0a0e5e21b1bd2c1b9e2f (default branch head, 2026-09-27). Adjudicated true: codecov/codecov-action@v7.1.0 is a third-party action on a movable tag.",
+      "code": "name: CI\non:\n  push:\n    branches: [master]\njobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n    - uses: actions/checkout@v5\n    - name: Upload coverage\n      uses: codecov/codecov-action@v7.1.0\n      with:\n        env_vars: TOXENV,DJANGO\n"
+    },
+    {
+      "id": "corpus.gha-if-condition-is-not-a-shell",
+      "expect": "no-finding",
+      "rules": [
+        "cwe-78.gha-run-untrusted-interpolation"
+      ],
+      "path": ".github/workflows/no-finding-if-condition.yml",
+      "note": "electerm/electerm .github/workflows/mac.yml:32 at fde153d677a170c5816368f6586647f3af4ef284, and the same nine lines in nine other electerm build workflows. The rule used `pattern-inside: \"run: ...\"`, and in `generic` mode `...` ran past the end of the `- run: npm i` step into the next step's `if:` line. An `if:` expression is evaluated by Actions, never by a shell, so all ten findings were false. The single-line `- run: npm i` above the `if:` is what made the leak reachable and is why it is in the fixture.",
+      "code": "name: mac-x64\non:\n  push:\n    branches: [ build, test ]\njobs:\n  build:\n    runs-on: macos-latest\n    steps:\n    - run: npm config set legacy-peer-deps true\n    - run: npm i\n\n    - name: Install R2 dependencies if needed\n      if: ${{ contains(github.event.head_commit.message, '[r2]') }}\n      run: npm i -D @aws-sdk/client-s3\n"
+    },
+    {
+      "id": "corpus.gha-env-binding-is-the-fix-not-the-defect",
+      "expect": "no-finding",
+      "rules": [
+        "cwe-78.gha-run-untrusted-interpolation"
+      ],
+      "path": ".github/workflows/no-finding-env-binding.yml",
+      "note": "The patch the `workflow_hardening` remediation family produces. The rule has to go silent on its own fix, otherwise the static assertion verification level can never prove one: that level asserts the rule fires on the original file and not on the patched one.",
+      "code": "name: greet\non:\n  issue_comment:\n    types: [created]\njobs:\n  greet:\n    runs-on: ubuntu-latest\n    steps:\n      - name: echo the comment\n        env:\n          COMMENT_BODY: ${{ github.event.comment.body }}\n        run: |\n          set -eu\n          echo \"$COMMENT_BODY\" >> body.md\n"
+    },
+    {
+      "id": "corpus.gha-ref-input-is-not-a-checkout",
+      "expect": "no-finding",
+      "rules": [
+        "cwe-200.gha-secret-in-untrusted-checkout-job",
+        "cwe-829.gha-untrusted-checkout-privileged-trigger"
+      ],
+      "path": ".github/workflows/no-finding-ref-input-not-checkout.yml",
+      "note": "google/slo-generator .github/workflows/deploy.yml:58 at 50ce1bf81d7c6a97da52cf167b1d3ee8100ddd90. The rule's only finding, read and false. The `ref:` it took for an untrusted checkout is an input to `tomchv/wait-my-workflow`, and the workflow is triggered by `push` to master, so no contributor revision is present at all. The rule now requires the privileged trigger and a `uses: ...checkout` step above the `ref:`.",
+      "code": "name: deploy\non:\n  push:\n    branches:\n      - master\njobs:\n  cloudrun:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Wait for container image build\n        uses: tomchv/wait-my-workflow@v1.1.0\n        id: wait-build\n        with:\n          token: ${{ secrets.GITHUB_TOKEN }}\n          checkName: cloudbuild\n          ref: ${{ github.event.pull_request.head.sha || github.sha }}\n      - name: Deploy Docker container to Cloud Run\n        run: make cloudrun\n        env:\n          GCR_PROJECT_ID: ${{ secrets.GCR_PROJECT_ID }}\n"
+    },
+    {
+      "id": "corpus.gha-pinned-and-first-party-references-stay-silent",
+      "expect": "no-finding",
+      "rules": [
+        "cwe-1357.gha-third-party-action-unpinned"
+      ],
+      "path": ".github/workflows/no-finding-pinned-references.yml",
+      "note": "The four reference shapes the rule must not claim: a full commit digest with the tag in a trailing comment, a first-party `actions/*` tag, a local composite action, and a reusable workflow in the same repository. Taken from this repository's own `.github/workflows/ci.yml` and `deploy-analysis-cloudrun.yml`, which is where the digest-plus-comment convention comes from.",
+      "code": "name: CI\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0\n      - uses: actions/setup-node@v4\n      - uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcaf3b2c9e6ba # v6.9.0\n      - uses: ./.github/actions/setup\n  b:\n    uses: ./.github/workflows/deploy-api-cloudrun.yml\n"
     }
   ]
 }
